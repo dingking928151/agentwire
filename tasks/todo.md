@@ -1,10 +1,10 @@
 # AgentCodec MVP checklist
 
 ## Task 1: Canonical message model and strict wire codec
-- [ ] Define `MessageV1`, `FallbackRequired`, and deterministic wire codec.
-- [ ] Write and observe failing tests before production code.
-- [ ] Pass exact round-trip, escaping, Unicode/newline, invalid enum, unknown protocol, and missing-field tests.
-- [ ] Commit and pass independent spec/quality review.
+- [x] Define `MessageV1`, `FallbackRequired`, and deterministic wire codec.
+- [x] Write and observe failing tests before production code.
+- [x] Pass exact round-trip, escaping, Unicode/newline, invalid enum, unknown protocol, and missing-field tests.
+- [x] Commit and pass independent spec/quality review, including fix round 1.
 
 ## Task 2: User dictionary isolation and property tests
 - [ ] Define and validate user-scoped dictionary loading.

@@ -46,13 +46,13 @@
 - `decode_message(payload: str, dictionary: UserDictionary | None = None) -> MessageV1`.
 - `FallbackRequired`: typed error for unknown protocol/dictionary versions, unknown aliases, malformed wire data, or invalid fields.
 
-- [ ] **Step 1: Write failing tests** for exact round-trip of every field and fixed enum compression.
-- [ ] **Step 2: Run focused tests and verify the expected failure** because schema/codec APIs do not exist.
-- [ ] **Step 3: Write failing tests** for escaped delimiters, Unicode/newlines, unknown protocol version, invalid enum, and missing required fields.
-- [ ] **Step 4: Run focused tests and verify the expected failure** for the missing strict handling.
-- [ ] **Step 5: Implement the minimal schema and deterministic codec** with explicit field order, reversible escaping, exact alias substitution, and fail-closed errors.
-- [ ] **Step 6: Run `pytest tests/test_codec.py -q` and verify all pass.**
-- [ ] **Step 7: Run `pytest -q` and verify the full suite passes.**
+- [x] **Step 1: Write failing tests** for exact round-trip of every field and fixed enum compression.
+- [x] **Step 2: Run focused tests and verify the expected failure** because schema/codec APIs do not exist.
+- [x] **Step 3: Write failing tests** for escaped delimiters, Unicode/newlines, unknown protocol version, invalid enum, and missing required fields.
+- [x] **Step 4: Run focused tests and verify the expected failure** for the missing strict handling.
+- [x] **Step 5: Implement the minimal schema and deterministic codec** with explicit field order, reversible escaping, exact alias substitution, and fail-closed errors.
+- [x] **Step 6: Run `pytest tests/test_codec.py -q` and verify all pass.**
+- [x] **Step 7: Run `pytest -q` and verify the full suite passes.**
 
 ### Task 2: User dictionary isolation and property tests
 
