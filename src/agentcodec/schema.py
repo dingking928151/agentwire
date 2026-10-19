@@ -1,10 +1,19 @@
-"""Canonical v1 data. Approval flags never grant authorization."""
+"""Canonical v1 data uses Unicode scalars; approval flags never grant authorization."""
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
-Identifier = Annotated[str, Field(min_length=1)]
+
+def _scalar_unicode(value: str) -> str:
+    """Reject surrogate code points without replacing or normalizing any text."""
+    if any("\ud800" <= character <= "\udfff" for character in value):
+        raise ValueError("text must contain only Unicode scalar values (no surrogate code points)")
+    return value
+
+
+UnicodeText = Annotated[str, AfterValidator(_scalar_unicode)]
+Identifier = Annotated[UnicodeText, Field(min_length=1)]
 
 
 class MessageV1(BaseModel):
@@ -14,12 +23,12 @@ class MessageV1(BaseModel):
 
     message_id: Identifier
     message_type: Literal["delegate", "status", "result"]
-    task: str
+    task: UnicodeText
     status: Literal["pending", "running", "blocked", "completed", "failed", "cancelled"]
-    blocker: str | None
-    next_step: str | None
-    evidence: list[str]
-    constraints: list[str]
+    blocker: UnicodeText | None
+    next_step: UnicodeText | None
+    evidence: list[UnicodeText]
+    constraints: list[UnicodeText]
     approval_required: bool
     user_id: Identifier
     dictionary_version: Identifier | None

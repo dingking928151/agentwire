@@ -37,7 +37,9 @@ def _errors():
 
 
 def _read(source: str) -> str:
-    return sys.stdin.read() if source == "-" else Path(source).read_text(encoding="utf-8")
+    # Preserve line endings: text I/O's universal-newline translation invents LF.
+    data = sys.stdin.buffer.read() if source == "-" else Path(source).read_bytes()
+    return data.decode("utf-8")
 
 
 def _write(text: str, destination: str):
@@ -110,7 +112,7 @@ def benchmark(input: Input = "-", output: Output = "-"):
     Requires pre-provisioned local vocabulary caches; never downloads them.
     """
     with _errors():
-        tasks = ([_message(line) for line in _read(input).splitlines() if line.strip()]
+        tasks = ([_message(line) for line in _read(input).split("\n") if line.strip()]
                  if input == "-" else load_tasks(Path(input)))
         report = run_benchmark(tasks, ["o200k_base", "cl100k_base"])
         _write(report.model_dump_json(indent=2), output)

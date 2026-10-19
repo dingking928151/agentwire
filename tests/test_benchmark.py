@@ -260,3 +260,29 @@ def test_invalid_run_parameters_are_rejected(tasks, encodings, reuses, monkeypat
     stub_tokens(monkeypatch, b)
     with pytest.raises(ValueError):
         b.run_benchmark(tasks, encodings, reuse_counts=reuses)
+
+
+@pytest.mark.parametrize("separator", ["\u0085", "\u2028", "\u2029"])
+@pytest.mark.parametrize("record_delimiter", ["\n", "\r\n"])
+@pytest.mark.parametrize("record_count", [1, 2])
+def test_load_tasks_preserves_unicode_line_separators(
+    tmp_path, separator, record_delimiter, record_count,
+):
+    # Catches treating Unicode string content as JSONL record boundaries.
+    text = f"before{separator}after"
+    expected = [message(message_id=f"t{index}", task=text, blocker=text,
+                        next_step=text, evidence=[text], constraints=[text]).model_dump()
+                for index in range(record_count)]
+    serialized = record_delimiter.join(json.dumps(row, ensure_ascii=False) for row in expected)
+    path = tmp_path / "unicode.jsonl"
+    path.write_bytes((serialized + record_delimiter).encode("utf-8"))
+    assert [task.model_dump() for task in module().load_tasks(path)] == expected
+
+
+def test_load_tasks_does_not_treat_bare_carriage_return_as_record_delimiter(tmp_path):
+    # Catches file newline translation inventing a JSONL LF boundary.
+    path = tmp_path / "bare-cr.jsonl"
+    path.write_bytes((message().model_dump_json() + "\r" +
+                      message(message_id="t2").model_dump_json()).encode("utf-8"))
+    with pytest.raises(ValueError, match="line 1"):
+        module().load_tasks(path)

@@ -94,7 +94,8 @@ def load_tasks(path: Path) -> list[MessageV1]:
     """Load strict v1 JSONL; ignore blank lines, reject duplicate keys and IDs."""
     tasks = []
     ids = set()
-    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    # JSONL uses LF (optionally preceded by CR), not Unicode line separators.
+    for number, line in enumerate(path.read_bytes().decode("utf-8").split("\n"), 1):
         if not line.strip():
             continue
         try:

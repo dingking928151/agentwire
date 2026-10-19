@@ -202,3 +202,71 @@ def test_benchmark_rejects_invalid_stdin(app, text):
     assert result.exit_code != 0
     assert "fallback_required" in result.stderr
     assert result.stdout == ""
+
+
+@pytest.mark.parametrize("separator", ["\u0085", "\u2028", "\u2029"])
+@pytest.mark.parametrize("record_delimiter", ["\n", "\r\n"])
+@pytest.mark.parametrize("record_count", [1, 2])
+@pytest.mark.parametrize("source", ["file", "stdin"])
+def test_benchmark_preserves_unicode_line_separators(
+    app, message, tmp_path, separator, record_delimiter, record_count, source,
+):
+    # Catches either CLI path splitting valid content rather than record delimiters.
+    text = f"before{separator}after"
+    records = [message | dict(message_id=f"cli-{index}", task=text, blocker=text,
+                              next_step=text, evidence=[text], constraints=[text])
+               for index in range(record_count)]
+    serialized = record_delimiter.join(json.dumps(row, ensure_ascii=False) for row in records)
+    serialized += record_delimiter
+    args = ["benchmark"]
+    kwargs = {"input": serialized}
+    if source == "file":
+        path = tmp_path / "unicode.jsonl"
+        path.write_bytes(serialized.encode("utf-8"))
+        args += ["--input", str(path)]
+        kwargs = {}
+    result = invoke(app, args, **kwargs)
+    assert result.exit_code == 0, result.output
+    report = json.loads(result.stdout)
+    assert report["task_count"] == record_count
+    for rows in report["results"].values():
+        for name in ("codec", "codec_dictionary"):
+            assert [row["message_id"] for row in rows[name]["messages"]] == [
+                row["message_id"] for row in records
+            ]
+            assert rows[name]["round_trip_equal_count"] == record_count
+            assert rows[name]["critical_constraint_loss_count"] == 0
+            assert rows[name]["fallback_count"] == 0
+
+
+@pytest.mark.parametrize("command", ["decode", "validate"])
+@pytest.mark.parametrize("escaped", ["%22%5Cud800%22", "%22%5Cudfff%22"])
+def test_escaped_lone_surrogate_wire_fails_closed(app, message, command, escaped):
+    # Catches reporting invalid escaped Unicode as valid or emitting partial JSON.
+    from agentcodec.codec import encode_message
+    from agentcodec.schema import MessageV1
+    parts = encode_message(MessageV1(**message)).split("|")
+    parts[3] = escaped
+    args = [command] + (["--format", "wire"] if command == "validate" else [])
+    result = invoke(app, args, input="|".join(parts))
+    assert result.exit_code != 0
+    assert "fallback_required" in result.stderr
+    assert result.stdout == ""
+    assert "Traceback" not in result.stderr
+
+
+@pytest.mark.parametrize("source", ["file", "stdin"])
+def test_benchmark_rejects_bare_carriage_return_record_delimiter(app, message, tmp_path, source):
+    # Catches inconsistent record delimiters between file and stdin paths.
+    serialized = json.dumps(message) + "\r" + json.dumps(message | {"message_id": "cli-2"})
+    args, kwargs = ["benchmark"], {"input": serialized}
+    if source == "file":
+        path = tmp_path / "bare-cr.jsonl"
+        path.write_bytes(serialized.encode("utf-8"))
+        args += ["--input", str(path)]
+        kwargs = {}
+    result = invoke(app, args, **kwargs)
+    assert result.exit_code != 0
+    assert "fallback_required" in result.stderr
+    assert "Extra data" in result.stderr
+    assert result.stdout == ""
