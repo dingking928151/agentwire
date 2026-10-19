@@ -26,7 +26,7 @@
 - Unknown protocol versions, dictionary versions, aliases, namespaces, malformed values, and missing required fields must fail closed and trigger fallback.
 - Repeated or overlapping dictionary entries must have deterministic behavior; cross-user decoding must not resolve another user's codes.
 - Explicit negation, approval requirements, budgets/amounts, dates, constraints, and evidence must remain unchanged.
-- Tokenizer or optional DRIXL dependency absence must be reported clearly, without fabricated comparison results.
+- Missing local tokenizer/encoding must be reported clearly, without fabricated comparison results; the DRIXL reference renderer has no third-party runtime dependency.
 
 ---
 
@@ -41,13 +41,14 @@
 
 **Interfaces:**
 - `MessageV1`: fields `message_id`, `message_type`, `task`, `status`, `blocker`, `next_step`, `evidence`, `constraints`, `approval_required`, `user_id`, `dictionary_version`.
+- `UserDictionary` in `schema.py`: validated `user_id`, `version`, and unique `aliases: dict[str, str]` mapping from short code to exact phrase; both codes and phrase values must be unique.
 - `encode_message(message: MessageV1, dictionary: UserDictionary | None = None) -> str`.
 - `decode_message(payload: str, dictionary: UserDictionary | None = None) -> MessageV1`.
 - `FallbackRequired`: typed error for unknown protocol/dictionary versions, unknown aliases, malformed wire data, or invalid fields.
 
 - [ ] **Step 1: Write failing tests** for exact round-trip of every field and fixed enum compression.
 - [ ] **Step 2: Run focused tests and verify the expected failure** because schema/codec APIs do not exist.
-- [ ] **Step 3: Write failing tests** for escaped delimiters, Unicode/newlines, unknown protocol version, unknown dictionary alias, missing field, and namespace mismatch.
+- [ ] **Step 3: Write failing tests** for escaped delimiters, Unicode/newlines, unknown protocol version, invalid enum, and missing required fields.
 - [ ] **Step 4: Run focused tests and verify the expected failure** for the missing strict handling.
 - [ ] **Step 5: Implement the minimal schema and deterministic codec** with explicit field order, reversible escaping, exact alias substitution, and fail-closed errors.
 - [ ] **Step 6: Run `pytest tests/test_codec.py -q` and verify all pass.**
@@ -61,11 +62,11 @@
 - Create: `tests/test_properties.py`
 
 **Interfaces:**
-- `UserDictionary`: validated `user_id`, `version`, and exact `aliases: dict[str, str]` mapping.
+- `UserDictionary`: import the validated type from `schema.py`; `dictionary.py` must not define a second representation.
 - `load_dictionary(path: Path, expected_user_id: str) -> UserDictionary`.
 - `encode_message` / `decode_message` consume a dictionary only after matching `user_id` and `dictionary_version`.
 
-- [ ] **Step 1: Write failing tests** for valid JSON dictionary load, wrong user ID, wrong version, duplicate alias/code, and cross-user isolation.
+- [ ] **Step 1: Write failing tests** for valid JSON dictionary load, wrong user ID, wrong version, duplicate code, duplicate phrase value, unknown alias, and cross-user isolation.
 - [ ] **Step 2: Run tests and verify expected failures** because dictionary loading and namespace enforcement do not exist.
 - [ ] **Step 3: Write failing Hypothesis properties** for round-trip across arbitrary Unicode text, delimiters, optional values, and approved dictionary substitutions.
 - [ ] **Step 4: Run property tests and verify expected failures.**
@@ -112,7 +113,7 @@
 - [ ] **Step 1: Write failing CLI tests** for the four commands, dictionary user mismatch, unknown code fallback, and offline benchmark invocation.
 - [ ] **Step 2: Run focused tests and verify the expected failures.**
 - [ ] **Step 3: Implement Typer commands** with file/stdin support and clear errors.
-- [ ] **Step 4: Write README** covering install, examples, exact CLI invocations, benchmark interpretation, limitations, and optional DRIXL setup.
+- [ ] **Step 4: Write README** covering install, examples, exact CLI invocations, benchmark interpretation, limitations, and the local DRIXL reference-format baseline.
 - [ ] **Step 5: Write SECURITY.md** covering untrusted data, dictionary isolation, approval fields not being authorization, and fallback behavior.
 - [ ] **Step 6: Run `pytest tests/test_cli.py -q` and verify all pass.**
 - [ ] **Step 7: Run full `pytest -q`, `python -m agentcodec.cli --help`, and a local synthetic benchmark; record exact outputs.**
