@@ -184,3 +184,48 @@ def test_ambiguous_json_alias_object_requires_fallback():
     parts[3] = "%7B%22a%22%3A%22a%22%2C%22a%22%3A%22b%22%7D"
     with pytest.raises(FallbackRequired):
         decode_message("|".join(parts), dictionary)
+
+
+@pytest.mark.parametrize("operation", ["encode", "decode"])
+@pytest.mark.parametrize("mutation", ["duplicate_phrase", "unhashable_phrase", "non_string_phrase", "empty_code"])
+def test_mutated_dictionary_requires_fallback(operation, mutation):
+    # Catches trusting a once-valid mutable model rather than all current entries.
+    from agentcodec.schema import MessageV1, UserDictionary
+    from agentcodec.codec import encode_message, decode_message, FallbackRequired
+
+    dictionary = UserDictionary(user_id="jason", version="v1", aliases={"a": "Never publish", "b": "Ask approval"})
+    message = MessageV1(**fields(task="Never publish", next_step="Unaliased next step", dictionary_version="v1"))
+    wire = encode_message(message, dictionary)
+    if mutation == "duplicate_phrase":
+        dictionary.aliases["b"] = "Never publish"
+    elif mutation == "unhashable_phrase":
+        dictionary.aliases["b"] = ["Never publish"]
+    elif mutation == "non_string_phrase":
+        dictionary.aliases = {"a": "Never publish", "b": 42}
+    else:
+        dictionary.aliases[""] = "Do not pay"
+
+    with pytest.raises(FallbackRequired) as error:
+        if operation == "encode":
+            encode_message(message, dictionary)
+        else:
+            decode_message(wire, dictionary)
+    assert error.value.status == "fallback_required"
+
+
+@pytest.mark.parametrize("stage", ["parser", "alias_expansion"])
+def test_deeply_nested_wire_json_requires_fallback(stage):
+    # Catches parser/expander recursion escaping the typed fallback boundary.
+    import sys
+
+    from agentcodec.schema import MessageV1
+    from agentcodec.codec import encode_message, decode_message, FallbackRequired
+
+    parts = encode_message(MessageV1(**fields())).split("|")
+    depth = sys.getrecursionlimit() + 100
+    if stage == "parser":
+        depth = max(10000, 4 * depth)
+    parts[3] = "%5B" * depth + "null" + "%5D" * depth
+    with pytest.raises(FallbackRequired) as error:
+        decode_message("|".join(parts))
+    assert error.value.status == "fallback_required"

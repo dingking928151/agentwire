@@ -37,6 +37,19 @@ def _unique_object(pairs):
     return result
 
 
+def _validated_dictionary(dictionary: UserDictionary | None) -> UserDictionary | None:
+    if dictionary is None:
+        return None
+    if not isinstance(dictionary, UserDictionary):
+        raise FallbackRequired("dictionary must be a UserDictionary")
+    try:
+        # Validate current raw fields, not the already-validated model instance.
+        # Pydantic copies aliases so the codec uses this validated local snapshot.
+        return UserDictionary.model_validate(vars(dictionary), strict=True)
+    except (ValueError, TypeError) as error:
+        raise FallbackRequired("invalid dictionary fields") from error
+
+
 def _check_dictionary(user_id, version, dictionary: UserDictionary | None):
     if dictionary is None:
         if version is not None:
@@ -70,6 +83,7 @@ def encode_message(message: MessageV1, dictionary: UserDictionary | None = None)
         message = MessageV1.model_validate(vars(message), strict=True)
     except ValueError as error:
         raise FallbackRequired("invalid message fields") from error
+    dictionary = _validated_dictionary(dictionary)
     _check_dictionary(message.user_id, message.dictionary_version, dictionary)
     reverse = {phrase: code for code, phrase in dictionary.aliases.items()} if dictionary else {}
     parts = ["AC1"]
@@ -87,6 +101,7 @@ def encode_message(message: MessageV1, dictionary: UserDictionary | None = None)
 def decode_message(payload: str, dictionary: UserDictionary | None = None) -> MessageV1:
     if not isinstance(payload, str):
         raise FallbackRequired("wire payload must be a string")
+    dictionary = _validated_dictionary(dictionary)
     parts = payload.split("|")
     if parts[0] != "AC1":
         raise FallbackRequired("unknown protocol version")
@@ -106,5 +121,5 @@ def decode_message(payload: str, dictionary: UserDictionary | None = None) -> Me
         for name in CONTENT_FIELDS:
             values[name] = _expand(values[name], dictionary)
         return MessageV1.model_validate(values, strict=True)
-    except (ValueError, KeyError, TypeError) as error:
+    except (ValueError, KeyError, TypeError, RecursionError) as error:
         raise FallbackRequired("invalid wire fields, enum, alias, or escaping") from error
