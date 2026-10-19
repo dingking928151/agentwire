@@ -110,14 +110,14 @@
 - CLI commands: `agentcodec encode`, `agentcodec decode`, `agentcodec validate`, `agentcodec benchmark`.
 - CLI errors use non-zero exit codes and readable fallback reasons; never execute decoded message content.
 
-- [ ] **Step 1: Write failing CLI tests** for the four commands, dictionary user mismatch, unknown code fallback, and offline benchmark invocation.
-- [ ] **Step 2: Run focused tests and verify the expected failures.**
-- [ ] **Step 3: Implement Typer commands** with file/stdin support and clear errors.
-- [ ] **Step 4: Write README** covering install, examples, exact CLI invocations, benchmark interpretation, limitations, and the local DRIXL reference-format baseline.
-- [ ] **Step 5: Write SECURITY.md** covering untrusted data, dictionary isolation, approval fields not being authorization, and fallback behavior.
-- [ ] **Step 6: Run `pytest tests/test_cli.py -q` and verify all pass.**
-- [ ] **Step 7: Run full `pytest -q`, `python -m agentcodec.cli --help`, and a local synthetic benchmark; record exact outputs.**
-- [ ] **Step 8: Verify the repo has no network/API calls or action execution paths.**
+- [x] **Step 1: Write failing CLI tests** for the four commands, dictionary user mismatch, unknown code fallback, and offline benchmark invocation.
+- [x] **Step 2: Run focused tests and verify the expected failures.**
+- [x] **Step 3: Implement Typer commands** with file/stdin support and clear errors.
+- [x] **Step 4: Write README** covering install, examples, exact CLI invocations, benchmark interpretation, limitations, and the local DRIXL reference-format baseline.
+- [x] **Step 5: Write SECURITY.md** covering untrusted data, dictionary isolation, approval fields not being authorization, and fallback behavior.
+- [x] **Step 6: Run `pytest tests/test_cli.py -q` and verify all pass.**
+- [x] **Step 7: Run full `pytest -q`, `python -m agentcodec.cli --help`, and a local synthetic benchmark; record exact outputs.**
+- [x] **Step 8: Verify the repo has no network/API calls or action execution paths.**
 
 ## Checkpoint: MVP Complete
 

@@ -22,11 +22,11 @@
 - [x] Commit and pass independent spec/quality review.
 
 ## Task 4: Offline CLI and user documentation
-- [ ] Write failing tests for encode/decode/validate/benchmark before CLI implementation.
-- [ ] Implement file/stdin CLI with non-zero errors and no action execution.
-- [ ] Add README and SECURITY guidance on isolation, approvals, errors, and benchmark limitations.
-- [ ] Run CLI help, sample benchmark, and complete test suite.
-- [ ] Commit and pass independent spec/quality review.
+- [x] Write failing tests for encode/decode/validate/benchmark before CLI implementation.
+- [x] Implement file/stdin CLI with non-zero errors and no action execution.
+- [x] Add README and SECURITY guidance on isolation, approvals, errors, and benchmark limitations.
+- [x] Run CLI help, sample benchmark, and complete test suite.
+- [x] Commit and pass independent spec/quality review.
 
 ## Final checkpoint
 - [ ] Independent whole-branch review completed.
