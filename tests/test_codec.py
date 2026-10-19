@@ -103,6 +103,24 @@ def test_schema_rejects_invalid_fields(changes):
         MessageV1(**fields(**changes))
 
 
+@pytest.mark.parametrize("missing_field", [
+    "message_id", "message_type", "task", "status", "blocker", "next_step",
+    "evidence", "constraints", "approval_required", "user_id", "dictionary_version",
+])
+def test_schema_rejects_each_missing_canonical_field(missing_field):
+    # Catches making any canonical field optional, even nullable/list/false fields.
+    from pydantic import ValidationError
+    from agentcodec.schema import MessageV1
+
+    data = fields(approval_required=False, evidence=[], constraints=[])
+    del data[missing_field]
+    with pytest.raises(ValidationError) as error:
+        MessageV1(**data)
+    assert [(item["loc"], item["type"]) for item in error.value.errors()] == [
+        ((missing_field,), "missing"),
+    ]
+
+
 def test_dictionary_model_validates_exact_unique_entries():
     # Catches accepting ambiguous phrase values or coercing dictionary metadata.
     from pydantic import ValidationError

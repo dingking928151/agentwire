@@ -143,6 +143,23 @@ def test_drixl_message_type_mapping(kind, expected):
     assert f"@t:{expected}" in baselines.render_drixl(message(message_type=kind))
 
 
+def test_natural_language_renders_all_eleven_fields_in_canonical_order():
+    # Catches dropping/reordering a field or hiding explicit null/list/false values.
+    baselines = module("bench.baselines")
+    original = MessageV1(
+        message_id="nl-11", message_type="result", task="检查 [x] | 20%",
+        status="completed", blocker=None, next_step="Keep local; do not send.",
+        evidence=["proof:17", "receipt:29"], constraints=["Budget <= $31.", "Never buy."],
+        approval_required=False, user_id="nl-owner", dictionary_version="nl-v7",
+    )
+    assert baselines.render_natural_language(original) == (
+        'ID: "nl-11"; Type: "result"; Task: "检查 [x] | 20%"; Status: "completed"; '
+        'Blocker: null; Next step: "Keep local; do not send."; '
+        'Evidence: ["proof:17","receipt:29"]; Constraints: ["Budget <= $31.","Never buy."]; '
+        'Approval required: false; User: "nl-owner"; Dictionary version: "nl-v7".'
+    )
+
+
 def test_five_conditions_have_equivalent_fields_and_separate_quality_metrics(monkeypatch):
     b = module()
     stub_tokens(monkeypatch, b)
@@ -400,6 +417,111 @@ def test_suite_keeps_scenarios_separate_and_uses_matched_dictionary_payloads():
     for old, new in {"codec": "ac1", "codec_dictionary": "ac1_dictionary", "json": "json",
                      "natural_language": "natural_language", "drixl": "drixl"}.items():
         assert legacy.results["o200k_base"][old] == first.scenarios["diverse"].results["o200k_base"][new]
+
+
+def test_one_message_suite_preserves_explicit_fields_and_only_selects_dictionary_version(monkeypatch):
+    # Catches omissions shared by encoders/decoders, altered metadata, or unmatched dictionaries.
+    from urllib.parse import unquote
+    from agentcodec.schema import UserDictionary
+
+    b = suite_api()
+    stub_tokens(monkeypatch, b)
+    expected = {
+        "message_id": "paired-11", "message_type": "status", "task": "检查 [budget] | 35%",
+        "status": "blocked", "blocker": "Waiting for local evidence.",
+        "next_step": "Review; do not send.", "evidence": ["proof:41", "receipt:53"],
+        "constraints": ["Do not buy before 2026-11-09.", "Budget <= $47."],
+        "approval_required": False, "user_id": "paired-owner", "dictionary_version": None,
+    }
+    expected_selected = {**expected, "dictionary_version": "paired-v3"}
+    expected_dictionary = {
+        "user_id": "paired-owner", "version": "paired-v3",
+        "aliases": {"TASK": "检查 [budget] | 35%", "WAIT": "Waiting for local evidence.",
+                    "NEXT": "Review; do not send.", "PROOF": "proof:41",
+                    "HOLD": "Do not buy before 2026-11-09.", "LIMIT": "Budget <= $47."},
+    }
+    original = MessageV1(**expected)
+    dictionary = UserDictionary(**expected_dictionary)
+    rendered = {}
+    decoded = {"ac1": [], "ac2": []}
+
+    # Observe real boundary outputs; wrappers never synthesize a renderer/codec result.
+    def observe_renderer(name, renderer):
+        def capture(task):
+            text = renderer(task)
+            rendered[name] = text
+            return text
+        return capture
+
+    def observe_decoder(name, decoder):
+        def capture(payload, dictionary=None):
+            result = decoder(payload, dictionary)
+            decoded[name].append((payload, dictionary, result.model_dump()))
+            return result
+        return capture
+
+    for name in ("natural_language", "json", "drixl"):
+        attribute = "render_" + name
+        monkeypatch.setattr(b, attribute, observe_renderer(name, getattr(b, attribute)))
+    monkeypatch.setattr(b, "decode_message", observe_decoder("ac1", b.decode_message))
+    monkeypatch.setattr(b, "decode_message_ac2", observe_decoder("ac2", b.decode_message_ac2))
+
+    report = b.run_benchmark_suite(
+        {"explicit": b.BenchmarkScenario(tasks=[original], dictionary=dictionary)}, ["stub"],
+    )
+    assert set(report.scenarios) == {"explicit"}
+    scenario = report.scenarios["explicit"]
+    assert scenario.task_count == 1
+    assert scenario.dictionary.model_dump() == expected_dictionary
+    assert rendered["natural_language"] == (
+        'ID: "paired-11"; Type: "status"; Task: "检查 [budget] | 35%"; Status: "blocked"; '
+        'Blocker: "Waiting for local evidence."; Next step: "Review; do not send."; '
+        'Evidence: ["proof:41","receipt:53"]; '
+        'Constraints: ["Do not buy before 2026-11-09.","Budget <= $47."]; '
+        'Approval required: false; User: "paired-owner"; Dictionary version: null.'
+    )
+    assert json.loads(rendered["json"]) == expected
+    envelope, body = rendered["drixl"].split("\n", 1)
+    assert envelope == "@to:WORKER @fr:COORD @t:RES @p:MED"
+    assert body.startswith("ROUT ")
+    params = body.removeprefix("ROUT ").split(" ")
+    drixl_fields = {}
+    for param in params:
+        assert param.startswith("[") and param.endswith("]")
+        key, value = param[1:-1].split(":", 1)
+        assert key not in drixl_fields
+        drixl_fields[key] = json.loads(unquote(value))
+    assert drixl_fields == expected
+
+    rows = scenario.results["stub"]
+    assert set(rows) == SEVEN_FORMATS
+    for name, row in rows.items():
+        assert row.fallback_count == row.fallback_tokens == 0
+        assert len(row.messages) == 1
+        cost = row.messages[0]
+        assert cost.message_id == "paired-11"
+        assert cost.fallback_reason is None and cost.fallback_tokens == 0
+        if name in rendered:
+            assert cost.payload_tokens == len(rendered[name])
+        else:
+            assert row.round_trip_equal_count == 1
+            assert row.critical_constraint_loss_count == 0
+            assert cost.fields_equal is True
+
+    for name in ("ac1", "ac2"):
+        assert len(decoded[name]) == 2
+        plain_wire, no_dictionary, plain_fields = decoded[name][0]
+        selected_wire, selected_dictionary, selected_fields = decoded[name][1]
+        assert no_dictionary is None
+        assert plain_fields == expected
+        assert selected_fields == expected_selected
+        assert selected_dictionary is scenario.dictionary
+        assert selected_dictionary.model_dump() == expected_dictionary
+        assert rows[name].messages[0].payload_tokens == len(plain_wire)
+        assert rows[name + "_dictionary"].messages[0].payload_tokens == len(selected_wire)
+    assert decoded["ac1"][1][1] is decoded["ac2"][1][1]
+    assert original.model_dump() == expected
+    assert dictionary.model_dump() == expected_dictionary
 
 
 def test_ac1_diagnostics_use_unaliased_values_and_utf8_byte_denominator(monkeypatch):
