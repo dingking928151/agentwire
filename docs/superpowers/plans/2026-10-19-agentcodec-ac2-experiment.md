@@ -92,6 +92,21 @@
 - [x] **Step 5: Run CLI help/examples, two deterministic full benchmark-suite runs, `pytest tests/test_cli.py -q`, and full `pytest -q`; verify AC1 default golden output remains unchanged.**
 - [x] **Step 6: Review the entire branch, triage remaining Minor coverage notes from the prior base review, and retain the branch unmerged/unpushed.**
 
+### Task 4: Close inherited test-coverage suggestions
+
+**Files:**
+- Modify: `tests/test_codec.py`
+- Modify: `tests/test_benchmark.py`
+
+**Scope:** Test-only changes. Do not change production code, fixtures, benchmark results, or protocol behavior.
+
+- [x] **Step 1: Add a parametrized schema regression test** that independently omits each of the eleven canonical fields and expects `MessageV1` validation to reject it.
+- [x] **Step 2: Add an independent natural-language renderer expectation** with eleven distinct field values and one hand-written full output literal; assert the renderer emits each value, including null/list/false metadata, in canonical order.
+- [x] **Step 3: Add a one-message paired-suite test** with eleven explicit expected values and one explicit scenario dictionary; independently assert the natural-language/JSON/DRIXL baseline content and both AC1/AC2 dictionary conditions preserve all fields, select only the dictionary version, use the same dictionary, and report zero fallback.
+- [x] **Step 4: Demonstrate that the new tests catch omissions** using temporary mutations to one required schema field and one natural-language output field; observe expected test failures, then restore production files byte-for-byte so the final diff contains tests only.
+- [x] **Step 5: Run focused tests and full `pytest -q`; self-review; commit and obtain an independent task review.**
+- [x] **Step 6: Run a final whole-branch review and retain the branch local, unmerged, and unpushed.**
+
 ## Checkpoint: Experiment Complete
 
 - [x] AC1 and default CLI output remain unchanged; AC2 is strictly reversible and has typed failure behavior.

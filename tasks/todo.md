@@ -56,3 +56,10 @@
 - [x] Update README with both corpus comparisons, matched dictionaries, diagnosis and actual results.
 - [x] Run examples, deterministic benchmark twice, and full test suite.
 - [x] Run final independent whole-branch review; stay on this branch without merge/push.
+
+## Task 4: Close inherited test-coverage suggestions
+- [x] Parameterize schema omission rejection across all eleven canonical fields.
+- [x] Assert a full, hand-written natural-language baseline literal with distinct values for all eleven fields.
+- [x] Assert paired-suite baseline and AC1/AC2 dictionary conditions preserve all fields and dictionary-version selection.
+- [x] Demonstrate omission-sensitive failures with temporary mutations; restore production files and keep final diff test-only.
+- [x] Run focused and full tests, commit, obtain independent task review, and repeat final whole-branch review; do not merge/push.
