@@ -37,10 +37,10 @@
 # AC2 experiment checklist
 
 ## Task 1: Add opt-in AC2 codec
-- [ ] Write failing tests for golden payload, all-field round-trip, alias, dispatch, malformed data, and enum behavior.
-- [ ] Implement separate AC2 encode/decode; preserve existing AC1 functions and bytes.
-- [ ] Add strict AC1/AC2 wire dispatcher; run focused and full tests.
-- [ ] Commit and pass independent task review.
+- [x] Write failing tests for golden payload, all-field round-trip, alias, dispatch, malformed data, and enum behavior.
+- [x] Implement separate AC2 encode/decode; preserve existing AC1 functions and bytes.
+- [x] Add strict AC1/AC2 wire dispatcher; run focused and full tests.
+- [x] Commit and pass independent task review.
 
 ## Task 2: Add repetitive corpus and paired benchmark suite
 - [ ] Write failing tests for suite structure, paired dictionaries, per-field AC1 diagnosis, setup/fallback accounting, and old report compatibility.

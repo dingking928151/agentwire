@@ -44,12 +44,12 @@
 - `decode_payload(payload: str, dictionary: UserDictionary | None = None) -> MessageV1` dispatches only exact `AC1|` and `AC2|` prefixes; unknown inputs raise `FallbackRequired`.
 - AC2 reuses `FIELDS`, `ENUMS`, `CONTENT_FIELDS`, `MessageV1`, `UserDictionary`, `_validated_dictionary`, and `_check_dictionary`; AC1's `encode_message` and `decode_message` remain wire-compatible.
 
-- [ ] **Step 1: Write failing tests** for exact AC2 golden payload, all-field round-trip, enums, exact dictionary substitutions, AC1/AC2 prefix dispatch, unknown prefix, and the input classes in Review Focus 1–3.
-- [ ] **Step 2: Run `pytest tests/test_ac2.py -q` and confirm failures are due to missing AC2 API/expected behavior.**
-- [ ] **Step 3: Implement AC2 in `src/agentcodec/ac2.py`** as `AC2|` plus one compact JSON array in exact `FIELDS` order; enum positions carry existing short codes; other positions carry ordinary JSON values; alias objects replace exact approved strings only.
-- [ ] **Step 4: Add `decode_payload` dispatch** without changing AC1-specific function behavior; validate prefix, exact array size, enum map, alias shape, metadata selection, and strict canonical schema; convert malformed inputs to `FallbackRequired`.
-- [ ] **Step 5: Run focused codec/property tests and full `pytest -q`; capture exact RED/GREEN evidence.**
-- [ ] **Step 6: Self-review and commit; independent reviewer verifies spec compliance and code quality before Task 2.**
+- [x] **Step 1: Write failing tests** for exact AC2 golden payload, all-field round-trip, enums, exact dictionary substitutions, AC1/AC2 prefix dispatch, unknown prefix, and the input classes in Review Focus 1–3.
+- [x] **Step 2: Run `pytest tests/test_ac2.py -q` and confirm failures are due to missing AC2 API/expected behavior.**
+- [x] **Step 3: Implement AC2 in `src/agentcodec/ac2.py`** as `AC2|` plus one compact JSON array in exact `FIELDS` order; enum positions carry existing short codes; other positions carry ordinary JSON values; alias objects replace exact approved strings only.
+- [x] **Step 4: Add `decode_payload` dispatch** without changing AC1-specific function behavior; validate prefix, exact array size, enum map, alias shape, metadata selection, and strict canonical schema; convert malformed inputs to `FallbackRequired`.
+- [x] **Step 5: Run focused codec/property tests and full `pytest -q`; capture exact RED/GREEN evidence.**
+- [x] **Step 6: Self-review and commit; independent reviewer verifies spec compliance and code quality before Task 2.**
 
 ### Task 2: Add a high-repetition corpus and paired-format benchmark suite
 
