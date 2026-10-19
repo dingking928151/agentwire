@@ -9,8 +9,9 @@ from typing import Annotated
 
 import typer
 
-from .benchmark import load_tasks, run_benchmark
-from .codec import FallbackRequired, decode_message, encode_message
+from .ac2 import encode_message_ac2
+from .benchmark import DEMO_DICTIONARY, BenchmarkScenario, load_tasks, run_benchmark, run_benchmark_suite
+from .codec import FallbackRequired, decode_payload, encode_message
 from .dictionary import load_dictionary
 from .schema import MessageV1
 
@@ -25,6 +26,11 @@ User = Annotated[str | None, typer.Option("--user-id", help="Explicit expected d
 class InputFormat(str, Enum):
     json = "json"
     wire = "wire"
+
+
+class WireFormat(str, Enum):
+    ac1 = "ac1"
+    ac2 = "ac2"
 
 
 @contextmanager
@@ -71,22 +77,25 @@ def _dictionary(path: Path | None, user_id: str | None):
 
 
 @app.command()
-def encode(input: Input = "-", output: Output = "-", dictionary: Dictionary = None, user_id: User = None):
-    """Encode one canonical JSON message to AC1; never execute its content."""
+def encode(input: Input = "-", output: Output = "-", dictionary: Dictionary = None,
+           user_id: User = None,
+           format: Annotated[WireFormat, typer.Option("--format", help="Output wire format; AC2 is opt-in.")] = WireFormat.ac1):
+    """Encode one JSON message to AC1 (default) or AC2; never execute content."""
     with _errors():
         selected = _dictionary(dictionary, user_id)
-        payload = encode_message(_message(_read(input)), selected)
+        encoder = encode_message_ac2 if format == WireFormat.ac2 else encode_message
+        payload = encoder(_message(_read(input)), selected)
         _write(payload, output)
 
 
 @app.command()
 def decode(input: Input = "-", output: Output = "-", dictionary: Dictionary = None, user_id: User = None):
-    """Decode one AC1 message to canonical JSON, or require fallback."""
+    """Decode one AC1/AC2 message by exact prefix, or require fallback."""
     with _errors():
         selected = _dictionary(dictionary, user_id)
         # Accept one CLI-generated line ending, not arbitrary trailing whitespace.
         payload = _read(input).removesuffix("\n").removesuffix("\r")
-        message = decode_message(payload, selected)
+        message = decode_payload(payload, selected)
         _write(message.model_dump_json(), output)
 
 
@@ -94,12 +103,12 @@ def decode(input: Input = "-", output: Output = "-", dictionary: Dictionary = No
 def validate(input: Input = "-", output: Output = "-", dictionary: Dictionary = None,
              user_id: User = None,
              format: Annotated[InputFormat, typer.Option("--format", help="Input representation.")] = InputFormat.json):
-    """Validate JSON (default) or AC1 wire data; validity is not authorization."""
+    """Validate JSON (default) or AC1/AC2 wire data; not authorization."""
     with _errors():
         selected = _dictionary(dictionary, user_id)
         text = _read(input)
         if format == InputFormat.wire:
-            decode_message(text.removesuffix("\n").removesuffix("\r"), selected)
+            decode_payload(text.removesuffix("\n").removesuffix("\r"), selected)
         else:
             encode_message(_message(text), selected)
         _write('{"status":"valid"}', output)
@@ -115,6 +124,31 @@ def benchmark(input: Input = "-", output: Output = "-"):
         tasks = ([_message(line) for line in _read(input).split("\n") if line.strip()]
                  if input == "-" else load_tasks(Path(input)))
         report = run_benchmark(tasks, ["o200k_base", "cl100k_base"])
+        _write(report.model_dump_json(indent=2), output)
+
+
+@app.command("benchmark-suite")
+def benchmark_suite(
+    diverse_input: Annotated[Path, typer.Option("--diverse-input", help="Diverse scenario UTF-8 JSONL file.")],
+    repetitive_input: Annotated[Path, typer.Option("--repetitive-input", help="Repetitive scenario UTF-8 JSONL file.")],
+    repetitive_dictionary: Annotated[Path, typer.Option("--repetitive-dictionary", help="Strict manual dictionary JSON for repetitive data.")],
+    output: Output = "-",
+):
+    """Compare seven formats in two separate scenarios, offline, reuse 1/10/50.
+
+    Diverse uses the built-in demo dictionary. Repetitive dictionary ownership
+    must match the first repetitive message; all messages retain namespace checks.
+    Both tokenizer vocabulary caches must already exist locally.
+    """
+    with _errors():
+        diverse_tasks = load_tasks(diverse_input)
+        repetitive_tasks = load_tasks(repetitive_input)
+        dictionary = load_dictionary(repetitive_dictionary, expected_user_id=repetitive_tasks[0].user_id)
+        scenarios = {
+            "diverse": BenchmarkScenario(tasks=diverse_tasks, dictionary=DEMO_DICTIONARY),
+            "repetitive": BenchmarkScenario(tasks=repetitive_tasks, dictionary=dictionary),
+        }
+        report = run_benchmark_suite(scenarios, ["o200k_base", "cl100k_base"])
         _write(report.model_dump_json(indent=2), output)
 
 

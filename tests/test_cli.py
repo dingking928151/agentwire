@@ -52,13 +52,16 @@ def test_file_encode_and_stdin_decode_preserve_every_field(app, message, tmp_pat
     assert json.loads(decoded.stdout) == message
 
 
-def test_decode_file_to_output_is_data_not_execution(app, message, tmp_path):
+@pytest.mark.parametrize("format", ["ac1", "ac2"])
+def test_decode_file_to_output_is_data_not_execution(app, message, tmp_path, format):
     marker = tmp_path / "never-created"
     message["task"] = f"__import__('pathlib').Path({str(marker)!r}).touch()"
+    from agentcodec.ac2 import encode_message_ac2
     from agentcodec.codec import encode_message
     from agentcodec.schema import MessageV1
     source, target = tmp_path / "wire.txt", tmp_path / "decoded.json"
-    source.write_text(encode_message(MessageV1(**message)) + "\n", encoding="utf-8")
+    encoder = encode_message_ac2 if format == "ac2" else encode_message
+    source.write_text(encoder(MessageV1(**message)) + "\n", encoding="utf-8")
     result = invoke(app, ["decode", "--input", str(source), "--output", str(target)])
     assert result.exit_code == 0, result.output
     assert json.loads(target.read_text(encoding="utf-8")) == message
@@ -87,12 +90,14 @@ def dictionary(tmp_path):
     return path
 
 
-def test_dictionary_round_trip_requires_explicit_matching_selection(app, message, dictionary):
+@pytest.mark.parametrize("format", [None, "ac1", "ac2"])
+def test_dictionary_round_trip_requires_explicit_matching_selection(app, message, dictionary, format):
     message["dictionary_version"] = "v1"
     selection = ["--dictionary", str(dictionary), "--user-id", "demo-user"]
-    encoded = invoke(app, ["encode", *selection], input=json.dumps(message))
+    format_args = ["--format", format] if format else []
+    encoded = invoke(app, ["encode", *format_args, *selection], input=json.dumps(message))
     assert encoded.exit_code == 0, encoded.output
-    assert "%22a%22%3A%22NP%22" in encoded.stdout
+    assert ('{"a":"NP"}' if format == "ac2" else "%22a%22%3A%22NP%22") in encoded.stdout
     decoded = invoke(app, ["decode", *selection], input=encoded.stdout)
     assert decoded.exit_code == 0, decoded.output
     assert json.loads(decoded.stdout) == message
@@ -180,7 +185,8 @@ def test_benchmark_stdin_and_output_file(app, message, tmp_path):
     assert json.loads(path.read_text(encoding="utf-8"))["task_count"] == 1
 
 
-def test_benchmark_missing_cache_fails_offline(app, tmp_path, monkeypatch):
+@pytest.mark.parametrize("command", ["benchmark", "benchmark-suite"])
+def test_benchmark_missing_cache_fails_offline(app, tmp_path, monkeypatch, command):
     from agentcodec import benchmark
     benchmark._get_encoding.cache_clear()
     monkeypatch.setenv("TIKTOKEN_CACHE_DIR", str(tmp_path))
@@ -188,7 +194,8 @@ def test_benchmark_missing_cache_fails_offline(app, tmp_path, monkeypatch):
         pytest.fail("CLI attempted network access")
     monkeypatch.setattr(socket.socket, "connect", forbidden)
     try:
-        result = invoke(app, ["benchmark", "--input", str(ROOT / "bench/tasks.v1.jsonl")])
+        args = suite_args() if command == "benchmark-suite" else ["benchmark", "--input", str(ROOT / "bench/tasks.v1.jsonl")]
+        result = invoke(app, args)
         assert result.exit_code != 0
         assert "cache" in result.stderr and "fallback_required" in result.stderr
         assert result.stdout == ""
@@ -269,4 +276,179 @@ def test_benchmark_rejects_bare_carriage_return_record_delimiter(app, message, t
     assert result.exit_code != 0
     assert "fallback_required" in result.stderr
     assert "Extra data" in result.stderr
+    assert result.stdout == ""
+
+
+# Task 3: lock the default wire bytes, format dispatch, and explicit suite inputs.
+AC1_GOLDEN = (
+    'AC1|%22cli-1%22|D|%22Review%20%E4%B8%AD%E6%96%87%20%7C%2020%25.%22|P|null|'
+    '%22Ask%20before%20sending.%22|%5B%22local.txt%22%5D|'
+    '%5B%22Do%20not%20publish.%22%2C%22Budget%20%3C%3D%20%2425.%22%5D|true|%22demo-user%22|null\n'
+)
+AC2_GOLDEN = (
+    'AC2|["cli-1","D","Review 中文 | 20%.","P",null,"Ask before sending.",'
+    '["local.txt"],["Do not publish.","Budget <= $25."],true,"demo-user",null]\n'
+)
+
+
+@pytest.mark.parametrize("format,expected", [(None, AC1_GOLDEN), ("ac1", AC1_GOLDEN),
+                                             ("ac2", AC2_GOLDEN)])
+def test_encode_format_has_exact_wire_and_ac1_default(app, message, format, expected):
+    # Catches changing default AC1 bytes or routing explicit AC2 to AC1.
+    args = ["encode"] + (["--format", format] if format else [])
+    result = invoke(app, args, input=json.dumps(message))
+    assert result.exit_code == 0, result.output
+    assert result.stdout == expected
+
+
+@pytest.mark.parametrize("wire", [AC1_GOLDEN, AC2_GOLDEN])
+@pytest.mark.parametrize("command", ["decode", "validate"])
+def test_known_wire_prefix_is_autodetected(app, message, wire, command):
+    # Literal wires independently test both decoder/validator dispatch branches.
+    args = [command] + (["--format", "wire"] if command == "validate" else [])
+    result = invoke(app, args, input=wire)
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == (message if command == "decode" else {"status": "valid"})
+
+
+@pytest.mark.parametrize("wire", ["AC99|[]", "AC2x|[]", "ac2|[]", "AC2|[]", "AC2|[bad]"])
+@pytest.mark.parametrize("command", ["decode", "validate"])
+def test_unknown_or_malformed_wire_fails_without_partial_output(app, wire, command):
+    args = [command] + (["--format", "wire"] if command == "validate" else [])
+    result = invoke(app, args, input=wire)
+    assert result.exit_code == 1
+    assert "fallback_required" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert result.stdout == ""
+
+
+@pytest.mark.parametrize("format", ["ac1", "ac2"])
+@pytest.mark.parametrize("failure", ["missing", "alias", "version"])
+@pytest.mark.parametrize("command", ["decode", "validate"])
+def test_wire_dictionary_failure_is_closed(app, message, dictionary, format, failure, command):
+    from agentcodec.ac2 import encode_message_ac2
+    from agentcodec.codec import encode_message
+    from agentcodec.dictionary import load_dictionary
+    from agentcodec.schema import MessageV1
+    message["dictionary_version"] = "v1"
+    encoder = encode_message_ac2 if format == "ac2" else encode_message
+    wire = encoder(MessageV1(**message), load_dictionary(dictionary, "demo-user"))
+    selection = ["--dictionary", str(dictionary), "--user-id", "demo-user"]
+    if failure == "missing":
+        selection = []
+    elif failure == "alias":
+        wire = wire.replace("NP", "UNKNOWN")
+    else:
+        wire = wire.replace("v1", "v99")
+    args = [command, *selection] + (["--format", "wire"] if command == "validate" else [])
+    result = invoke(app, args, input=wire)
+    assert result.exit_code == 1
+    assert "fallback_required" in result.stderr
+    assert result.stdout == ""
+
+
+def suite_args():
+    return ["benchmark-suite", "--diverse-input", str(ROOT / "bench/tasks.v1.jsonl"),
+            "--repetitive-input", str(ROOT / "bench/tasks-repetitive.v1.jsonl"),
+            "--repetitive-dictionary", str(ROOT / "bench/dictionaries/repeat-v1.json")]
+
+
+@pytest.mark.parametrize("missing", ["--diverse-input", "--repetitive-input", "--repetitive-dictionary"])
+def test_suite_requires_each_explicit_path(app, missing):
+    args = suite_args()
+    index = args.index(missing)
+    del args[index:index + 2]
+    result = invoke(app, args)
+    assert result.exit_code == 2
+    assert "Missing option" in result.stderr and missing in result.stderr
+
+
+def test_benchmark_suite_reports_separate_matched_scenarios_offline(app, monkeypatch, tmp_path):
+    # Catches missing suite, wrong dictionaries/formats, blended corpora, or network use.
+    def forbidden(*args, **kwargs):
+        pytest.fail("CLI attempted network access")
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    monkeypatch.setattr(socket, "create_connection", forbidden)
+    first = invoke(app, suite_args())
+    target = tmp_path / "suite.json"
+    second = invoke(app, [*suite_args(), "--output", str(target)])
+    assert first.exit_code == second.exit_code == 0, first.output + second.output
+    assert second.stdout == ""
+    assert first.stdout == target.read_text(encoding="utf-8")
+    report = json.loads(first.stdout)
+    assert report["report_version"] == "suite-v1"
+    assert report["reuse_counts"] == [1, 10, 50]
+    assert set(report["scenarios"]) == {"diverse", "repetitive"}
+    for name, owner, version in [("diverse", "demo-user", "demo-v1"),
+                                  ("repetitive", "repeat-user", "repeat-v1")]:
+        scenario = report["scenarios"][name]
+        assert scenario["task_count"] == 30
+        assert scenario["dictionary"]["user_id"] == owner
+        assert scenario["dictionary"]["version"] == version
+        assert set(scenario["results"]) == {"o200k_base", "cl100k_base"}
+        for encoding, rows in scenario["results"].items():
+            assert set(rows) == {"natural_language", "json", "drixl", "ac1", "ac1_dictionary",
+                                 "ac2", "ac2_dictionary"}
+            assert scenario["ac1_diagnostics"][encoding]["diagnostic_only"] is True
+            assert rows["ac1_dictionary"]["dictionary_tokens"] == rows["ac2_dictionary"]["dictionary_tokens"] > 0
+            for codec in ("ac1", "ac1_dictionary", "ac2", "ac2_dictionary"):
+                row = rows[codec]
+                assert row["round_trip_equal_count"] == 30
+                assert row["critical_constraint_loss_count"] == row["fallback_count"] == 0
+                for reuse in (1, 10, 50):
+                    assert row["amortized"][str(reuse)]["total_tokens"] == row["setup_tokens"] + reuse * row["total_tokens"]
+    # Preserve negative empirical cases, using complete-session rather than payload cost.
+    diverse = report["scenarios"]["diverse"]["results"]
+    for rows in diverse.values():
+        assert rows["ac1"]["amortized"]["1"]["total_tokens"] > rows["json"]["total_tokens"]
+        assert rows["ac2_dictionary"]["total_tokens"] > rows["ac2"]["total_tokens"]
+    repeat = report["scenarios"]["repetitive"]["results"]["o200k_base"]
+    assert repeat["ac1_dictionary"]["amortized"]["1"]["total_tokens"] == 7779
+    assert repeat["json"]["total_tokens"] == 7760
+
+
+def test_suite_consumes_supplied_paths_and_dictionary_not_repo_defaults(app, message, tmp_path, dictionary):
+    # Nonstandard paths, different corpus sizes and owner/version reveal implicit defaults.
+    diverse, repetitive = tmp_path / "one.jsonl", tmp_path / "two.jsonl"
+    diverse.write_text(json.dumps(message) + "\n", encoding="utf-8")
+    repetitive.write_text("\n".join(json.dumps(message | {"message_id": f"custom-{n}"})
+                                     for n in range(2)) + "\n", encoding="utf-8")
+    result = invoke(app, ["benchmark-suite", "--diverse-input", str(diverse),
+                         "--repetitive-input", str(repetitive),
+                         "--repetitive-dictionary", str(dictionary)])
+    assert result.exit_code == 0, result.output
+    scenarios = json.loads(result.stdout)["scenarios"]
+    assert scenarios["diverse"]["task_count"] == 1
+    assert scenarios["repetitive"]["task_count"] == 2
+    assert scenarios["repetitive"]["dictionary"] == {"user_id": "demo-user", "version": "v1",
+                                                        "aliases": {"NP": "Do not publish."}}
+    for rows in scenarios["repetitive"]["results"].values():
+        for name in ("ac1_dictionary", "ac2_dictionary"):
+            assert rows[name]["round_trip_equal_count"] == 2
+            assert [m["message_id"] for m in rows[name]["messages"]] == ["custom-0", "custom-1"]
+
+
+@pytest.mark.parametrize("option", ["--diverse-input", "--repetitive-input", "--repetitive-dictionary"])
+@pytest.mark.parametrize("content", [None, "{}", '{"user_id":"repeat-user","user_id":"repeat-user"}'])
+def test_suite_invalid_local_input_preserves_output(app, tmp_path, option, content):
+    source, target = tmp_path / "invalid", tmp_path / "keep.json"
+    if content is not None:
+        source.write_text(content, encoding="utf-8")
+    target.write_text("keep me", encoding="utf-8")
+    args = suite_args()
+    args[args.index(option) + 1] = str(source)
+    result = invoke(app, [*args, "--output", str(target)])
+    assert result.exit_code == 1
+    assert "fallback_required" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert result.stdout == ""
+    assert target.read_text(encoding="utf-8") == "keep me"
+
+
+def test_suite_dictionary_owner_must_match_repetitive_input(app, dictionary):
+    args = suite_args()
+    args[args.index("--repetitive-dictionary") + 1] = str(dictionary)
+    result = invoke(app, args)
+    assert result.exit_code == 1
+    assert "fallback_required" in result.stderr and "user" in result.stderr
     assert result.stdout == ""
