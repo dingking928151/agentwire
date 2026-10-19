@@ -90,11 +90,11 @@
 - [x] **Step 3: Implement CLI format selection/dispatch and the distinct suite command** without changing existing benchmark or encode defaults.
 - [x] **Step 4: Update README examples and interpretation** to show AC1/AC2 coexistence, both separate corpus results, field-level diagnostic meaning, matched dictionaries, and the empirical result; do not claim token savings unless both tokenizers and end-to-end setup/fallback costs show it.
 - [x] **Step 5: Run CLI help/examples, two deterministic full benchmark-suite runs, `pytest tests/test_cli.py -q`, and full `pytest -q`; verify AC1 default golden output remains unchanged.**
-- [ ] **Step 6: Review the entire branch, triage remaining Minor coverage notes from the prior base review, and retain the branch unmerged/unpushed.**
+- [x] **Step 6: Review the entire branch, triage remaining Minor coverage notes from the prior base review, and retain the branch unmerged/unpushed.**
 
 ## Checkpoint: Experiment Complete
 
-- [ ] AC1 and default CLI output remain unchanged; AC2 is strictly reversible and has typed failure behavior.
-- [ ] Both corpora remain separate and AC1/AC2 use matched scenario dictionaries.
-- [ ] Both tokenizer reports are deterministic and include setup/fallback; AC1 diagnostics are not represented as full-message totals.
-- [ ] Full test suite and final independent code review pass; no external integrations, merge, push, or publication occur.
+- [x] AC1 and default CLI output remain unchanged; AC2 is strictly reversible and has typed failure behavior.
+- [x] Both corpora remain separate and AC1/AC2 use matched scenario dictionaries.
+- [x] Both tokenizer reports are deterministic and include setup/fallback; AC1 diagnostics are not represented as full-message totals.
+- [x] Full test suite and final independent code review pass; no external integrations, merge, push, or publication occur.
