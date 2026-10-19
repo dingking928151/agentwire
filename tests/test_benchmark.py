@@ -286,3 +286,212 @@ def test_load_tasks_does_not_treat_bare_carriage_return_as_record_delimiter(tmp_
                       message(message_id="t2").model_dump_json()).encode("utf-8"))
     with pytest.raises(ValueError, match="line 1"):
         module().load_tasks(path)
+
+
+# Task 2: catch dictionary mismatches, omitted costs, and diagnostic/payload mixing.
+REPETITIVE = ROOT / "bench" / "tasks-repetitive.v1.jsonl"
+REPEAT_DICTIONARY = ROOT / "bench" / "dictionaries" / "repeat-v1.json"
+SEVEN_FORMATS = {"natural_language", "json", "drixl", "ac1", "ac1_dictionary", "ac2", "ac2_dictionary"}
+
+
+def suite_api():
+    b = module()
+    assert hasattr(b, "run_benchmark_suite"), "paired benchmark suite API is missing"
+    assert hasattr(b, "BenchmarkScenario"), "explicit scenario input is missing"
+    return b
+
+
+def test_repetitive_fixture_is_versioned_repeated_and_diverse_source_unchanged():
+    import hashlib
+    from collections import Counter
+    from agentcodec.dictionary import load_dictionary
+    assert hashlib.sha256(DATA.read_bytes()).hexdigest() == "9284dc0b7a878355c6e8ddc0195cd7adcade9b4966dc3a07aeb58f2f1f2ad7b8"
+    assert REPETITIVE.exists(), "separate repetitive v1 corpus is missing"
+    assert REPEAT_DICTIONARY.exists(), "manual repeat-v1 dictionary is missing"
+    tasks = module().load_tasks(REPETITIVE)
+    assert [m.message_id for m in tasks] == [f"repeat-v1-{i:02d}" for i in range(1, 31)]
+    assert {m.user_id for m in tasks} == {"repeat-user"}
+    assert {m.dictionary_version for m in tasks} == {None}
+    dictionary = load_dictionary(REPEAT_DICTIONARY, "repeat-user")
+    assert dictionary.version == "repeat-v1"
+    with pytest.raises(FallbackRequired, match="user"):
+        load_dictionary(REPEAT_DICTIONARY, "other-user")
+    counts = Counter(m.task for m in tasks)
+    assert max(counts.values()) >= 10
+    assert sum(len(phrase) >= 80 for phrase in dictionary.aliases.values()) >= 4
+    for phrase in dictionary.aliases.values():
+        assert any(phrase == value or isinstance(value, list) and phrase in value
+                   for m in tasks for value in m.model_dump().values())
+    assert {m.message_type for m in tasks} == {"delegate", "status", "result"}
+    assert {m.approval_required for m in tasks} == {True, False}
+    text = " ".join(m.task + " ".join(m.constraints) for m in tasks)
+    assert "Do not" in text and "$25" in text and "2026-11-01" in text
+    assert "检查" in text and "|" in text and "[" in text and "%" in text
+
+
+def test_suite_keeps_scenarios_separate_and_uses_matched_dictionary_payloads():
+    from agentcodec.codec import encode_message
+    from agentcodec.ac2 import encode_message_ac2
+    from agentcodec.dictionary import load_dictionary
+    b = suite_api()
+    tasks = b.load_tasks(DATA)
+    repetitive = b.load_tasks(REPETITIVE)
+    repeat_dictionary = load_dictionary(REPEAT_DICTIONARY, "repeat-user")
+    scenarios = {"diverse": b.BenchmarkScenario(tasks=tasks, dictionary=b.DEMO_DICTIONARY),
+                 "repetitive": b.BenchmarkScenario(tasks=repetitive, dictionary=repeat_dictionary)}
+    before = [m.model_dump() for m in tasks + repetitive]
+    first = b.run_benchmark_suite(scenarios, ["o200k_base", "cl100k_base"])
+    second = b.run_benchmark_suite(scenarios, ["o200k_base", "cl100k_base"])
+    assert first.model_dump_json() == second.model_dump_json()
+    assert first.report_version == "suite-v1"
+    assert first.reuse_counts == [1, 10, 50]
+    assert set(first.scenarios) == {"diverse", "repetitive"}
+    for name, scenario in first.scenarios.items():
+        source = scenarios[name]
+        assert scenario.task_count == 30
+        assert scenario.dictionary == source.dictionary
+        for encoding, rows in scenario.results.items():
+            assert set(rows) == SEVEN_FORMATS
+            for fmt, row in rows.items():
+                assert len(row.messages) == 30
+                assert row.fallback_count == row.fallback_tokens == 0
+                assert row.total_tokens == row.payload_tokens == sum(m.payload_tokens for m in row.messages)
+                assert row.setup_tokens == row.protocol_tokens + row.dictionary_tokens
+                assert row.protocol_tokens == b.count_tokens(scenario.protocol_instructions[fmt], encoding)
+                expected_dict_cost = b.count_tokens(source.dictionary.model_dump_json(), encoding) if fmt.endswith("_dictionary") else 0
+                assert row.dictionary_tokens == expected_dict_cost
+                for n in (1, 10, 50):
+                    assert row.amortized[n].total_tokens == row.setup_tokens + n * row.total_tokens
+                    assert row.amortized[n].tokens_per_corpus == pytest.approx(row.total_tokens + row.setup_tokens / n)
+                    assert row.amortized[n].tokens_per_message == pytest.approx((row.setup_tokens + n * row.total_tokens) / (30 * n))
+                if fmt.startswith(("ac1", "ac2")):
+                    assert row.round_trip_equal_count == 30 and row.round_trip_equal_rate == 1
+                    assert row.critical_constraint_loss_count == 0
+                    encoder = encode_message if fmt.startswith("ac1") else encode_message_ac2
+                    dictionary = source.dictionary if fmt.endswith("_dictionary") else None
+                    for original, cost in zip(source.tasks, row.messages):
+                        selected = original.model_copy(update={"dictionary_version": dictionary.version}) if dictionary else original
+                        assert cost.payload_tokens == b.count_tokens(encoder(selected, dictionary), encoding)
+                else:
+                    assert row.round_trip_equal_rate is row.critical_constraint_loss_count is None
+            diagnostic = scenario.ac1_diagnostics[encoding]
+            from urllib.parse import quote
+            from statistics import mean, median
+            for field, costs in diagnostic.non_enum_fields.items():
+                for original, sample in zip(source.tasks, costs.samples):
+                    literal = json.dumps(getattr(original, field), ensure_ascii=False, separators=(",", ":"))
+                    escaped = quote(literal, safe="")
+                    assert sample.json_tokens == b.count_tokens(literal, encoding)
+                    assert sample.ac1_tokens == b.count_tokens(escaped, encoding)
+                    assert sample.token_delta == sample.ac1_tokens - sample.json_tokens
+                    raw_bytes = literal.encode("utf-8")
+                    escaped_bytes = sum(byte not in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-~" for byte in raw_bytes)
+                    assert sample.original_utf8_bytes == len(raw_bytes)
+                    assert sample.escaped_utf8_bytes == escaped_bytes
+                    assert sample.escaped_utf8_byte_ratio == escaped_bytes / len(raw_bytes)
+                assert costs.token_delta_mean == mean(s.token_delta for s in costs.samples)
+                assert costs.token_delta_median == median(s.token_delta for s in costs.samples)
+    assert [m.model_dump() for m in tasks + repetitive] == before
+    # Existing report stays five-format, version 1, with its original dictionary metadata.
+    legacy = b.run_benchmark(tasks, ["o200k_base"])
+    assert legacy.report_version == "1"
+    assert set(legacy.results["o200k_base"]) == {"natural_language", "json", "drixl", "codec", "codec_dictionary"}
+    assert legacy.demo_dictionary == b.DEMO_DICTIONARY
+    for old, new in {"codec": "ac1", "codec_dictionary": "ac1_dictionary", "json": "json",
+                     "natural_language": "natural_language", "drixl": "drixl"}.items():
+        assert legacy.results["o200k_base"][old] == first.scenarios["diverse"].results["o200k_base"][new]
+
+
+def test_ac1_diagnostics_use_unaliased_values_and_utf8_byte_denominator(monkeypatch):
+    b = suite_api()
+    stub_tokens(monkeypatch, b)
+    tasks = [message(task="中|", constraints=["Do not publish."]),
+             message(message_id="t2", task="ab"), message(message_id="t3", task="abc")]
+    report = b.run_benchmark_suite({"sample": b.BenchmarkScenario(tasks=tasks, dictionary=b.DEMO_DICTIONARY)}, ["stub"])
+    scenario = report.scenarios["sample"]
+    diagnostic = scenario.ac1_diagnostics["stub"]
+    assert diagnostic.diagnostic_only is True
+    assert diagnostic.condition == "ac1_no_dictionary"
+    assert set(diagnostic.non_enum_fields) == set(b.FIELDS) - {"message_type", "status"}
+    assert set(diagnostic.enum_fields) == {"message_type", "status"}
+    field = diagnostic.non_enum_fields["task"]
+    # '"中|"' is 6 UTF-8 bytes, all 6 escaped: %22%E4%B8%AD%7C%22.
+    sample = field.samples[0]
+    assert (sample.json_tokens, sample.ac1_tokens, sample.token_delta) == (4, 18, 14)
+    assert (sample.original_utf8_bytes, sample.escaped_utf8_bytes, sample.escaped_utf8_byte_ratio) == (6, 6, 1)
+    assert field.samples[1].token_delta == 4  # '"ab"' -> '%22ab%22'
+    assert field.token_delta_mean == pytest.approx(22 / 3)
+    assert field.token_delta_median == 4
+    assert field.json_tokens == 13 and field.ac1_tokens == 35 and field.token_delta == 22
+    assert field.escaped_utf8_byte_ratio == pytest.approx(10 / 15)  # byte-weighted, not mean of ratios
+    alias_field = diagnostic.non_enum_fields["constraints"].samples[0]
+    assert alias_field.json_tokens == len('["Do not publish."]')
+    assert alias_field.ac1_tokens == len('%5B%22Do%20not%20publish.%22%5D')
+    enum = diagnostic.enum_fields["message_type"]
+    assert (enum.samples[0].json_tokens, enum.samples[0].ac1_tokens, enum.samples[0].token_delta) == (10, 1, -9)
+    assert enum.escaped_utf8_byte_ratio is None
+    assert diagnostic.enum_fields["status"].token_delta_mean == -8
+    components = sum(f.ac1_tokens for f in diagnostic.non_enum_fields.values()) + sum(f.ac1_tokens for f in diagnostic.enum_fields.values())
+    actual = scenario.results["stub"]["ac1"].payload_tokens
+    assert actual == components + 14 * len(tasks)  # AC1 prefix + eleven separators
+    assert actual != components
+
+
+@pytest.mark.parametrize("codec", ["ac1", "ac2"])
+@pytest.mark.parametrize("failure", ["encode", "decode", "loss"])
+def test_suite_codec_fallback_keeps_transmitted_payload_and_original_resend(monkeypatch, codec, failure):
+    b = suite_api()
+    stub_tokens(monkeypatch, b)
+    encoder_name = "encode_message" if codec == "ac1" else "encode_message_ac2"
+    decoder_name = "decode_message" if codec == "ac1" else "decode_message_ac2"
+    real_decode = getattr(b, decoder_name)
+    def reject(*args, **kwargs):
+        raise FallbackRequired("simulated failure")
+    def lossy(payload, dictionary=None):
+        return real_decode(payload, dictionary).model_copy(update={"constraints": []})
+    monkeypatch.setattr(b, encoder_name if failure == "encode" else decoder_name,
+                        lossy if failure == "loss" else reject)
+    original = message()
+    scenario = b.run_benchmark_suite({"sample": b.BenchmarkScenario(tasks=[original], dictionary=b.DEMO_DICTIONARY)}, ["stub"]).scenarios["sample"]
+    for fmt in (codec, codec + "_dictionary"):
+        row = scenario.results["stub"][fmt]
+        assert row.fallback_count == 1 and row.round_trip_equal_count == 0
+        assert row.fallback_tokens == len(b.render_json(original))
+        assert (row.payload_tokens == 0) is (failure == "encode")
+        assert row.total_tokens == row.payload_tokens + row.fallback_tokens
+        assert row.critical_constraint_loss_count == (1 if failure == "loss" else 6)
+        assert row.amortized[10].total_tokens == row.setup_tokens + 10 * row.total_tokens
+
+
+@pytest.mark.parametrize("owner,version", [("other-user", None), ("demo-user", "unknown-v1")])
+def test_suite_mismatched_metadata_falls_back_without_silent_reselection(owner, version, monkeypatch):
+    b = suite_api()
+    stub_tokens(monkeypatch, b)
+    scenario = b.run_benchmark_suite({"sample": b.BenchmarkScenario(
+        tasks=[message(user_id=owner, dictionary_version=version)], dictionary=b.DEMO_DICTIONARY)}, ["stub"]).scenarios["sample"]
+    for name in ("ac1_dictionary", "ac2_dictionary"):
+        row = scenario.results["stub"][name]
+        assert row.fallback_count == 1 and row.payload_tokens == 0
+        assert row.fallback_tokens > 0
+
+
+@pytest.mark.parametrize("kind", ["empty_scenarios", "empty_tasks", "duplicate_ids", "empty_encodings", "duplicate_encodings", "empty_reuses", "bad_reuse", "duplicate_reuses", "mutated_task", "mutated_dictionary"])
+def test_suite_rejects_invalid_inputs(kind, monkeypatch):
+    b = suite_api()
+    stub_tokens(monkeypatch, b)
+    task = message()
+    dictionary = b.DEMO_DICTIONARY.model_copy(deep=True)
+    scenarios = {"sample": b.BenchmarkScenario(tasks=[task], dictionary=dictionary)}
+    encodings, reuses = ["stub"], (1, 10, 50)
+    if kind == "empty_scenarios": scenarios = {}
+    if kind == "empty_tasks": scenarios["sample"].tasks.clear()
+    if kind == "duplicate_ids": scenarios["sample"].tasks.append(task)
+    if kind == "empty_encodings": encodings = []
+    if kind == "duplicate_encodings": encodings = ["stub", "stub"]
+    if kind == "empty_reuses": reuses = ()
+    if kind == "bad_reuse": reuses = (True,)
+    if kind == "duplicate_reuses": reuses = (1, 1)
+    if kind == "mutated_task": scenarios["sample"].tasks[0].approval_required = "false"
+    if kind == "mutated_dictionary": scenarios["sample"].dictionary.aliases["duplicate"] = next(iter(dictionary.aliases.values()))
+    with pytest.raises(ValueError):
+        b.run_benchmark_suite(scenarios, encodings, reuse_counts=reuses)
