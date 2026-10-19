@@ -14,12 +14,12 @@
 - [x] Commit and pass independent spec/quality review.
 
 ## Task 3: Versioned benchmark dataset and token accounting
-- [ ] Add 30 synthetic bilingual task messages and baseline renderers.
-- [ ] Test JSONL loading, token counting via stub, amortization, and fallback cost before implementation.
-- [ ] Implement deterministic accounting for reuse 1/10/50 and local `o200k_base` / `cl100k_base` estimates.
-- [ ] Render SamoTech/DRIXL v0.3.0 documented compact syntax locally; do not install the package.
-- [ ] Run benchmark twice and verify deterministic counts.
-- [ ] Commit and pass independent spec/quality review.
+- [x] Add 30 synthetic bilingual task messages and baseline renderers.
+- [x] Test JSONL loading, token counting via stub, amortization, and fallback cost before implementation.
+- [x] Implement deterministic accounting for reuse 1/10/50 and local `o200k_base` / `cl100k_base` estimates.
+- [x] Render SamoTech/DRIXL v0.3.0 documented compact syntax locally; do not install the package.
+- [x] Run benchmark twice and verify deterministic counts.
+- [x] Commit and pass independent spec/quality review.
 
 ## Task 4: Offline CLI and user documentation
 - [ ] Write failing tests for encode/decode/validate/benchmark before CLI implementation.

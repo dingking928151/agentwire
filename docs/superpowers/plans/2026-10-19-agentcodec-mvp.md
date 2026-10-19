@@ -88,14 +88,14 @@
 - `run_benchmark(tasks, encodings, reuse_counts=(1, 10, 50)) -> BenchmarkReport`.
 - `BenchmarkReport` includes per-message and total counts; one-time protocol/dictionary instruction costs; amortized costs; fallback count/cost; round-trip field equality and critical-constraint loss count.
 
-- [ ] **Step 1: Write failing tests** for JSONL loading, deterministic token counts via a stub tokenizer, amortization math, and fallback costs.
-- [ ] **Step 2: Run tests and verify the expected failures.**
-- [ ] **Step 3: Prepare 30 synthetic messages** with explicit equivalent fields across five conditions: concise natural language, JSON, DRIXL, generic codec, generic codec + demo user dictionary.
-- [ ] **Step 4: Implement benchmark accounting** including setup cost and reuse counts 1, 10, and 50; use `tiktoken` adapters for `o200k_base` and `cl100k_base` in real runs.
-- [ ] **Step 5: Add a DRIXL reference-format renderer** matching the publicly documented compact syntax in SamoTech/DRIXL v0.3.0 README; do not install/import the package, and label this as a format baseline rather than a library-runtime test.
-- [ ] **Step 6: Run `pytest tests/test_benchmark.py -q` and verify all pass.**
-- [ ] **Step 7: Run benchmark twice and confirm deterministic counts and report structure.**
-- [ ] **Step 8: Run `pytest -q` and verify the full suite passes.**
+- [x] **Step 1: Write failing tests** for JSONL loading, deterministic token counts via a stub tokenizer, amortization math, and fallback costs.
+- [x] **Step 2: Run tests and verify the expected failures.**
+- [x] **Step 3: Prepare 30 synthetic messages** with explicit equivalent fields across five conditions: concise natural language, JSON, DRIXL, generic codec, generic codec + demo user dictionary.
+- [x] **Step 4: Implement benchmark accounting** including setup cost and reuse counts 1, 10, and 50; use `tiktoken` adapters for `o200k_base` and `cl100k_base` in real runs.
+- [x] **Step 5: Add a DRIXL reference-format renderer** matching the publicly documented compact syntax in SamoTech/DRIXL v0.3.0 README; do not install/import the package, and label this as a format baseline rather than a library-runtime test.
+- [x] **Step 6: Run `pytest tests/test_benchmark.py -q` and verify all pass.**
+- [x] **Step 7: Run benchmark twice and confirm deterministic counts and report structure.**
+- [x] **Step 8: Run `pytest -q` and verify the full suite passes.**
 
 ### Task 4: Offline CLI and user documentation
 
