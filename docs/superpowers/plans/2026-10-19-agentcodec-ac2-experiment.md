@@ -85,11 +85,11 @@
 - `decode` and `validate --format wire` accept AC1 and AC2 through `decode_payload`.
 - Add a distinct `benchmark-suite` command requiring `--diverse-input`, `--repetitive-input`, and `--repetitive-dictionary` paths; it uses the existing built-in demo dictionary for the diverse scenario and the supplied dictionary for repetitive data. Existing `benchmark --input ...` behavior remains a one-corpus report.
 
-- [ ] **Step 1: Write failing CLI tests** for default AC1 output, explicit AC2 output, AC1 and AC2 autodetected decode, wire validation, unknown prefix/dictionary fallback, missing benchmark-suite paths, and offline `benchmark-suite` output with explicit local paths.
-- [ ] **Step 2: Run focused CLI tests and verify the expected failures.**
-- [ ] **Step 3: Implement CLI format selection/dispatch and the distinct suite command** without changing existing benchmark or encode defaults.
-- [ ] **Step 4: Update README examples and interpretation** to show AC1/AC2 coexistence, both separate corpus results, field-level diagnostic meaning, matched dictionaries, and the empirical result; do not claim token savings unless both tokenizers and end-to-end setup/fallback costs show it.
-- [ ] **Step 5: Run CLI help/examples, two deterministic full benchmark-suite runs, `pytest tests/test_cli.py -q`, and full `pytest -q`; verify AC1 default golden output remains unchanged.**
+- [x] **Step 1: Write failing CLI tests** for default AC1 output, explicit AC2 output, AC1 and AC2 autodetected decode, wire validation, unknown prefix/dictionary fallback, missing benchmark-suite paths, and offline `benchmark-suite` output with explicit local paths.
+- [x] **Step 2: Run focused CLI tests and verify the expected failures.**
+- [x] **Step 3: Implement CLI format selection/dispatch and the distinct suite command** without changing existing benchmark or encode defaults.
+- [x] **Step 4: Update README examples and interpretation** to show AC1/AC2 coexistence, both separate corpus results, field-level diagnostic meaning, matched dictionaries, and the empirical result; do not claim token savings unless both tokenizers and end-to-end setup/fallback costs show it.
+- [x] **Step 5: Run CLI help/examples, two deterministic full benchmark-suite runs, `pytest tests/test_cli.py -q`, and full `pytest -q`; verify AC1 default golden output remains unchanged.**
 - [ ] **Step 6: Review the entire branch, triage remaining Minor coverage notes from the prior base review, and retain the branch unmerged/unpushed.**
 
 ## Checkpoint: Experiment Complete

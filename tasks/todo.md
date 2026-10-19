@@ -51,8 +51,8 @@
 - [x] Commit and pass independent task review.
 
 ## Task 3: Expose opt-in CLI and update docs
-- [ ] Write failing CLI tests for AC1 default, explicit AC2, autodetect decode/validate, strict fallback, and benchmark-suite paths.
-- [ ] Implement `--format ac1|ac2` (default AC1) and explicit-path benchmark-suite command; preserve legacy benchmark behavior.
-- [ ] Update README with both corpus comparisons, matched dictionaries, diagnosis and actual results.
-- [ ] Run examples, deterministic benchmark twice, and full test suite.
+- [x] Write failing CLI tests for AC1 default, explicit AC2, autodetect decode/validate, strict fallback, and benchmark-suite paths.
+- [x] Implement `--format ac1|ac2` (default AC1) and explicit-path benchmark-suite command; preserve legacy benchmark behavior.
+- [x] Update README with both corpus comparisons, matched dictionaries, diagnosis and actual results.
+- [x] Run examples, deterministic benchmark twice, and full test suite.
 - [ ] Run final independent whole-branch review; stay on this branch without merge/push.
