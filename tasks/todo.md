@@ -32,3 +32,27 @@
 - [x] Independent whole-branch review completed.
 - [x] No Critical/Important issues remain open.
 - [x] Confirm all work stayed local; no publish, deploy, or real Agent/API integration.
+
+
+# AC2 experiment checklist
+
+## Task 1: Add opt-in AC2 codec
+- [ ] Write failing tests for golden payload, all-field round-trip, alias, dispatch, malformed data, and enum behavior.
+- [ ] Implement separate AC2 encode/decode; preserve existing AC1 functions and bytes.
+- [ ] Add strict AC1/AC2 wire dispatcher; run focused and full tests.
+- [ ] Commit and pass independent task review.
+
+## Task 2: Add repetitive corpus and paired benchmark suite
+- [ ] Write failing tests for suite structure, paired dictionaries, per-field AC1 diagnosis, setup/fallback accounting, and old report compatibility.
+- [ ] Add 30 stable-ID repetitive messages and repeat-v1 dictionary; verify diverse dataset hash is unchanged.
+- [ ] Implement separate scenario reports with all seven formats and matched per-scenario dictionary for AC1/AC2.
+- [ ] Add non-enum field-level percent-escape diagnosis and separate enum shortcode comparison; keep full-wire costs authoritative.
+- [ ] Run twice for both tokenizers and compare reports; run full tests.
+- [ ] Commit and pass independent task review.
+
+## Task 3: Expose opt-in CLI and update docs
+- [ ] Write failing CLI tests for AC1 default, explicit AC2, autodetect decode/validate, strict fallback, and benchmark-suite paths.
+- [ ] Implement `--format ac1|ac2` (default AC1) and explicit-path benchmark-suite command; preserve legacy benchmark behavior.
+- [ ] Update README with both corpus comparisons, matched dictionaries, diagnosis and actual results.
+- [ ] Run examples, deterministic benchmark twice, and full test suite.
+- [ ] Run final independent whole-branch review; stay on this branch without merge/push.
