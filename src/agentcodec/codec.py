@@ -123,3 +123,17 @@ def decode_message(payload: str, dictionary: UserDictionary | None = None) -> Me
         return MessageV1.model_validate(values, strict=True)
     except (ValueError, KeyError, TypeError, RecursionError) as error:
         raise FallbackRequired("invalid wire fields, enum, alias, or escaping") from error
+
+
+def decode_payload(payload: str, dictionary: UserDictionary | None = None) -> MessageV1:
+    """Dispatch only exact known protocol prefixes; never infer a wire format."""
+    if not isinstance(payload, str):
+        raise FallbackRequired("wire payload must be a string")
+    if payload.startswith("AC1|"):
+        return decode_message(payload, dictionary)
+    if payload.startswith("AC2|"):
+        # Lazy import keeps the AC1 implementation independent of the AC2 module.
+        from .ac2 import decode_message_ac2
+
+        return decode_message_ac2(payload, dictionary)
+    raise FallbackRequired("unknown protocol version")
