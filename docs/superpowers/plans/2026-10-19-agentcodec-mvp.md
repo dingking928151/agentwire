@@ -121,7 +121,7 @@
 
 ## Checkpoint: MVP Complete
 
-- [ ] All tests pass and the focused TDD red/green cycles were observed.
-- [ ] 30-task benchmark reruns deterministically for both tokenizers, with setup and fallback costs stated.
-- [ ] Critical fields round-trip without loss; malformed/unknown data fails closed.
-- [ ] All files remain under `/workspace/agentcodec`; no external Agent integration or publication occurred.
+- [x] All tests pass and the focused TDD red/green cycles were observed.
+- [x] 30-task benchmark reruns deterministically for both tokenizers, with setup and fallback costs stated.
+- [x] Critical fields round-trip without loss; malformed/unknown data fails closed.
+- [x] All files remain under `/workspace/agentcodec`; no external Agent integration or publication occurred.

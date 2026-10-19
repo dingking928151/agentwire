@@ -29,6 +29,6 @@
 - [x] Commit and pass independent spec/quality review.
 
 ## Final checkpoint
-- [ ] Independent whole-branch review completed.
-- [ ] No Critical/Important issues remain open.
-- [ ] Confirm all work stayed local; no publish, deploy, or real Agent/API integration.
+- [x] Independent whole-branch review completed.
+- [x] No Critical/Important issues remain open.
+- [x] Confirm all work stayed local; no publish, deploy, or real Agent/API integration.
