@@ -7,11 +7,11 @@
 - [x] Commit and pass independent spec/quality review, including fix round 1.
 
 ## Task 2: User dictionary isolation and property tests
-- [ ] Define and validate user-scoped dictionary loading.
-- [ ] Write and observe failing tests before production code.
-- [ ] Pass wrong namespace/version, duplicate alias/value, unknown alias, and cross-user isolation tests.
-- [ ] Pass Hypothesis round-trip tests for Unicode, delimiters, optional values, and exact substitutions.
-- [ ] Commit and pass independent spec/quality review.
+- [x] Define and validate user-scoped dictionary loading.
+- [x] Write and observe failing tests before production code.
+- [x] Pass wrong namespace/version, duplicate alias/value, unknown alias, and cross-user isolation tests.
+- [x] Pass Hypothesis round-trip tests for Unicode, delimiters, optional values, and exact substitutions.
+- [x] Commit and pass independent spec/quality review.
 
 ## Task 3: Versioned benchmark dataset and token accounting
 - [ ] Add 30 synthetic bilingual task messages and baseline renderers.

@@ -66,13 +66,13 @@
 - `load_dictionary(path: Path, expected_user_id: str) -> UserDictionary`.
 - `encode_message` / `decode_message` consume a dictionary only after matching `user_id` and `dictionary_version`.
 
-- [ ] **Step 1: Write failing tests** for valid JSON dictionary load, wrong user ID, wrong version, duplicate code, duplicate phrase value, unknown alias, and cross-user isolation.
-- [ ] **Step 2: Run tests and verify expected failures** because dictionary loading and namespace enforcement do not exist.
-- [ ] **Step 3: Write failing Hypothesis properties** for round-trip across arbitrary Unicode text, delimiters, optional values, and approved dictionary substitutions.
-- [ ] **Step 4: Run property tests and verify expected failures.**
-- [ ] **Step 5: Implement dictionary validation and namespace checks** with no automatic learning or network access.
-- [ ] **Step 6: Run `pytest tests/test_dictionary.py tests/test_properties.py -q` and verify all pass.**
-- [ ] **Step 7: Run `pytest -q` and verify the full suite passes.**
+- [x] **Step 1: Write failing tests** for valid JSON dictionary load, wrong user ID, wrong version, duplicate code, duplicate phrase value, unknown alias, and cross-user isolation.
+- [x] **Step 2: Run tests and verify expected failures** because dictionary loading and namespace enforcement do not exist.
+- [x] **Step 3: Write failing Hypothesis properties** for round-trip across arbitrary Unicode text, delimiters, optional values, and approved dictionary substitutions.
+- [x] **Step 4: Run property tests and verify expected failures.**
+- [x] **Step 5: Implement dictionary validation and namespace checks** with no automatic learning or network access.
+- [x] **Step 6: Run `pytest tests/test_dictionary.py tests/test_properties.py -q` and verify all pass.**
+- [x] **Step 7: Run `pytest -q` and verify the full suite passes.**
 
 ### Task 3: Versioned benchmark dataset and token accounting
 
