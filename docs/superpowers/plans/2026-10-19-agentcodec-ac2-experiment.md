@@ -65,13 +65,13 @@
 - Each scenario reports the seven formats named in Global Constraints. The original diverse scenario uses `DEMO_DICTIONARY`; the repetitive scenario uses the on-disk `repeat-v1` dictionary.
 - Add no-dictionary, field-level AC1 cost diagnostics comparing compact-JSON field values with percent-escaped AC1 values for non-enum fields, plus UTF-8 percent-escaped byte ratio; report enum short-code deltas separately. Clearly mark them diagnostic-only.
 
-- [ ] **Step 1: Write failing tests** for a 30-message repetitive fixture, dictionary load/owner/version, two scenarios with matched AC1/AC2 dictionaries, seven-format output, per-field escape diagnostics, setup/fallback/amortization, and preservation of the existing one-corpus API/report.
-- [ ] **Step 2: Run focused tests and verify expected failures before adding the new corpus or production benchmark code.**
-- [ ] **Step 3: Add the versioned repetitive JSONL and `repeat-v1` dictionary** with stable IDs, deliberately repeated long phrases and workflow constraints, while covering negation, budget/date, approval, Unicode, and delimiters; verify the existing diverse corpus hash is unchanged.
-- [ ] **Step 4: Implement the suite report/runner** for the seven explicit format conditions, selecting the same dictionary for AC1 and AC2 within each scenario; preserve full payload counts, setup, resend, reuse and quality metrics.
-- [ ] **Step 5: Implement no-dictionary per-field AC1 diagnostics** against compact JSON using both tokenizers; report `message_type`/`status` JSON-literal vs short-code costs separately, and test that diagnostic totals are not used as the actual message payload totals.
-- [ ] **Step 6: Run each suite twice for both tokenizers and compare the complete reports; verify round-trip/critical-field metrics and report actual totals without a savings threshold.**
-- [ ] **Step 7: Run focused and full tests, self-review, commit, and get an independent task review before Task 3.**
+- [x] **Step 1: Write failing tests** for a 30-message repetitive fixture, dictionary load/owner/version, two scenarios with matched AC1/AC2 dictionaries, seven-format output, per-field escape diagnostics, setup/fallback/amortization, and preservation of the existing one-corpus API/report.
+- [x] **Step 2: Run focused tests and verify expected failures before adding the new corpus or production benchmark code.**
+- [x] **Step 3: Add the versioned repetitive JSONL and `repeat-v1` dictionary** with stable IDs, deliberately repeated long phrases and workflow constraints, while covering negation, budget/date, approval, Unicode, and delimiters; verify the existing diverse corpus hash is unchanged.
+- [x] **Step 4: Implement the suite report/runner** for the seven explicit format conditions, selecting the same dictionary for AC1 and AC2 within each scenario; preserve full payload counts, setup, resend, reuse and quality metrics.
+- [x] **Step 5: Implement no-dictionary per-field AC1 diagnostics** against compact JSON using both tokenizers; report `message_type`/`status` JSON-literal vs short-code costs separately, and test that diagnostic totals are not used as the actual message payload totals.
+- [x] **Step 6: Run each suite twice for both tokenizers and compare the complete reports; verify round-trip/critical-field metrics and report actual totals without a savings threshold.**
+- [x] **Step 7: Run focused and full tests, self-review, commit, and get an independent task review before Task 3.**
 
 ### Task 3: Expose AC2 in CLI and document the experiment
 

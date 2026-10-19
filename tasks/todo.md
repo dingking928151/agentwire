@@ -43,12 +43,12 @@
 - [x] Commit and pass independent task review.
 
 ## Task 2: Add repetitive corpus and paired benchmark suite
-- [ ] Write failing tests for suite structure, paired dictionaries, per-field AC1 diagnosis, setup/fallback accounting, and old report compatibility.
-- [ ] Add 30 stable-ID repetitive messages and repeat-v1 dictionary; verify diverse dataset hash is unchanged.
-- [ ] Implement separate scenario reports with all seven formats and matched per-scenario dictionary for AC1/AC2.
-- [ ] Add non-enum field-level percent-escape diagnosis and separate enum shortcode comparison; keep full-wire costs authoritative.
-- [ ] Run twice for both tokenizers and compare reports; run full tests.
-- [ ] Commit and pass independent task review.
+- [x] Write failing tests for suite structure, paired dictionaries, per-field AC1 diagnosis, setup/fallback accounting, and old report compatibility.
+- [x] Add 30 stable-ID repetitive messages and repeat-v1 dictionary; verify diverse dataset hash is unchanged.
+- [x] Implement separate scenario reports with all seven formats and matched per-scenario dictionary for AC1/AC2.
+- [x] Add non-enum field-level percent-escape diagnosis and separate enum shortcode comparison; keep full-wire costs authoritative.
+- [x] Run twice for both tokenizers and compare reports; run full tests.
+- [x] Commit and pass independent task review.
 
 ## Task 3: Expose opt-in CLI and update docs
 - [ ] Write failing CLI tests for AC1 default, explicit AC2, autodetect decode/validate, strict fallback, and benchmark-suite paths.
