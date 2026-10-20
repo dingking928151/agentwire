@@ -146,7 +146,7 @@ class AttemptRecord(_StrictModel):
     metadata_selection: MetadataSelection
     request: EvalRequest
     request_sha256: UnicodeText
-    adapter_id: Literal["deterministic-mock-v1"]
+    adapter_id: Literal["deterministic-mock-v1", "scripted-mock-test-v1"]
     response: AdapterResponse | None
     decoded_message: MessageV1 | None
     decode_status: Literal["ok", "error", "not_attempted"]

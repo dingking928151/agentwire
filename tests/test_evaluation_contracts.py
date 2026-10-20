@@ -215,6 +215,24 @@ def test_contracts_reject_coercion_and_invalid_literals(contracts, name, field, 
         getattr(contracts, name)(**(model_examples()[name] | {field: value}))
 
 
+@pytest.mark.parametrize("adapter_id", ["deterministic-mock-v1", "scripted-mock-test-v1"])
+def test_attempt_record_accepts_only_fixed_mock_adapter_ids(contracts, adapter_id):
+    record = contracts.AttemptRecord(**record_values(adapter_id=adapter_id))
+    assert record.adapter_id == adapter_id
+    assert record.model_dump()["adapter_id"] == adapter_id
+
+
+@pytest.mark.parametrize("adapter_id", [
+    "", "mock-v1", "scripted-mock-v1", "scripted-mock-test-v2", "unknown",
+    " deterministic-mock-v1", "scripted-mock-test-v1 ", "SCRIPTED-MOCK-TEST-V1",
+])
+def test_attempt_record_rejects_unapproved_adapter_ids(contracts, adapter_id):
+    with pytest.raises(ValidationError) as error:
+        contracts.AttemptRecord(**record_values(adapter_id=adapter_id))
+    assert any(item["loc"] == ("adapter_id",) and item["type"] == "literal_error"
+               for item in error.value.errors())
+
+
 @pytest.mark.parametrize("field,names", [("field_equal", FIELDS), ("hard_field_equal", HARD_FIELDS)])
 def test_score_maps_require_exact_fields_and_strict_booleans(contracts, field, names):
     for invalid in (dict.fromkeys(names[:-1], False), dict.fromkeys((*names, "other"), False),
