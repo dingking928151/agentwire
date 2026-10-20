@@ -239,19 +239,25 @@ def _measure(attempt, request, reasons=()):
 def _clean_cost(candidate, setup_request, initial_request, initial_outcome):
     """Diagnostic only: no decisions or snapshots are changed by these counts."""
     resources = required_resources(candidate, initial_request.snapshot)
-    reasons = _resource_reason(resources)
+    # Setup is a distinct event. Its missing text cannot erase a known request
+    # variable cost; retain validity, readiness and context checks independently.
+    reasons = _resource_reason(tuple(item.model_copy(update={"setup_text": ""}) for item in resources))
     setup_total = 0
+    setup_known = True
+    unknown_reasons = []
     for index, resource in enumerate(_setups(candidate, setup_request)):
         tokens, _, unknown = _measure(_setup_attempt(resource, f"reference-setup-{index}"),
                                      setup_request, _resource_reason((resource,)))
+        unknown_reasons.extend(unknown)
         if tokens is None:
-            return None, None, unknown
-        setup_total += tokens
+            setup_known = False
+        else:
+            setup_total += tokens
     attempt = _payload_attempt(candidate, initial_request, initial_outcome, "reference-initial")
     tokens, _, unknown = _measure(attempt, initial_request, reasons)
-    if tokens is None:
-        return None, None, unknown
-    return setup_total + tokens, tokens, ()
+    unknown_reasons.extend(unknown)
+    total = setup_total + tokens if setup_known and tokens is not None else None
+    return total, tokens, tuple(dict.fromkeys(unknown_reasons))
 
 
 def _references(setup_request, initial_request, outcomes):
@@ -269,9 +275,10 @@ def _references(setup_request, initial_request, outcomes):
         variables[candidate.candidate_id] = variable
         reasons.extend(unknown)
     baseline = initial_request.original_format
-    if not costs or any(value is None for value in costs.values()):
-        return None, None, None, tuple(dict.fromkeys(reasons)) or ("required_cost_unknown",)
-    return min(costs.values()), costs.get(baseline), variables.get(baseline), ()
+    minimum = min(costs.values()) if costs and all(value is not None for value in costs.values()) else None
+    if minimum is None and not reasons:
+        reasons.append("required_cost_unknown")
+    return minimum, costs.get(baseline), variables.get(baseline), tuple(dict.fromkeys(reasons))
 
 
 def _intervals(flags):
@@ -290,11 +297,12 @@ def _replay(scenario, path, requests):
     ledger, statuses, reasons = [], [], []
     stopped = False
     grouped = _group_outcomes(path.outcomes)
-    actual = baseline_total = minimum_total = setup_total = operating_savings = 0
+    actual = baseline_total = minimum_total = setup_total = operating_delta = 0
     planned_setup = planned_savings = 0
     used_clean_savings = 0
-    diagnostics_known = True
     actual_known = True
+    minimum_known = baseline_known = setup_known = recovery_known = True
+    used_clean_known = full_declaration_known = True
     flags = []
     setup_events = []
     uses = []
@@ -317,8 +325,8 @@ def _replay(scenario, path, requests):
                     outcomes[0] if outcomes[0].stage == "initial" else OfflineOutcome(
                         case_index=c, repeat_index=r, stage="initial", success=True, response_text=None))
             reasons.extend(unknown)
-            if chosen_clean is None or baseline_variable is None or minimum is None:
-                diagnostics_known = False
+            if chosen_clean is None or baseline_variable is None:
+                full_declaration_known = False
             else:
                 planned_setup += chosen_clean - chosen_variable
                 planned_savings += max(0, baseline_variable - chosen_variable)
@@ -336,11 +344,13 @@ def _replay(scenario, path, requests):
             used_resources = []
 
             def record(attempt, req, stage, candidate_id, *, resource=None, cost_reasons=(), success=None):
-                nonlocal actual_known, actual, setup_total
+                nonlocal actual_known, actual, setup_total, setup_known
                 tokens, components, unknown = _measure(attempt, req, cost_reasons)
                 local_reasons.extend(unknown)
                 if tokens is None:
                     actual_known = False
+                    if stage == "setup":
+                        setup_known = False
                 else:
                     actual += tokens
                     if stage == "setup":
@@ -396,19 +406,32 @@ def _replay(scenario, path, requests):
             reasons.extend(local_reasons)
             if status["status"] != "simulated_success" and scenario.remainder_policy == "stop_group":
                 stopped = True
-            if minimum is not None:
-                minimum_total += minimum if len(ledger) > start else 0
-            if baseline is None:
-                diagnostics_known = False
-            else:
-                baseline_total += baseline if len(ledger) > start else 0
+            # Only positions with actual simulated events contribute reference
+            # cost. Rejected/unexecuted suffixes cannot invalidate prefix facts.
+            if len(ledger) > start:
+                if minimum is None:
+                    minimum_known = False
+                else:
+                    minimum_total += minimum
+                if baseline is None:
+                    baseline_known = False
+                else:
+                    baseline_total += baseline
             request_tokens = [event["total_tokens"] for event in ledger[start:] if event["attempt_kind"] != "setup"]
-            if request_tokens and all(value is not None for value in request_tokens) and baseline_variable is not None:
-                operating_savings += max(0, baseline_variable - sum(request_tokens))
-            if (any(event["attempt_kind"] == "initial" for event in ledger[start:])
-                    and baseline_variable is not None and chosen_variable is not None):
-                used_clean_savings += max(0, baseline_variable - chosen_variable)
-            flags.append(actual_known and diagnostics_known and actual < baseline_total)
+            if request_tokens:
+                if any(value is None for value in request_tokens) or baseline_variable is None:
+                    recovery_known = False
+                else:
+                    operating_delta += baseline_variable - sum(request_tokens)
+            if any(event["attempt_kind"] == "initial" for event in ledger[start:]):
+                if baseline_variable is None or chosen_variable is None:
+                    used_clean_known = False
+                else:
+                    used_clean_savings += max(0, baseline_variable - chosen_variable)
+            # Once cumulative inputs become unknown, retain already evaluated
+            # intervals and bound them by the last exactly known prefix.
+            if actual_known and baseline_known:
+                flags.append(actual < baseline_total)
 
     # Display-only S/M, with one logical use even if that case retries. Bind a
     # use to the latest setup for its exact identity at or before its epoch.
@@ -428,20 +451,28 @@ def _replay(scenario, path, requests):
         if count and event["total_tokens"] is not None:
             share = Fraction(event["total_tokens"], count)
             event["display_tokens_per_use"] = dict(numerator=share.numerator, denominator=share.denominator)
-    comparable = diagnostics_known and actual_known
-    unamortized = max(0, setup_total - operating_savings) if comparable else None
-    planned_unamortized = max(0, planned_setup - planned_savings) if comparable else None
+    # Later fault overhead must offset earlier operating savings. Bound only
+    # the net recovered setup, not each position's signed contribution.
+    recovered_setup = min(setup_total, max(0, operating_delta)) if setup_known and recovery_known else None
+    unamortized = setup_total - recovered_setup if recovered_setup is not None else None
+    planned_unamortized = max(0, planned_setup - planned_savings) if full_declaration_known else None
     # Isolate missing logical uses under the clean declaration. Retry/fallback
     # overhead belongs to realized cost/regret, not to a reuse-count shortfall.
-    used_clean_unamortized = max(0, setup_total - used_clean_savings) if comparable else None
-    intervals = _intervals(flags) if comparable else ()
+    used_clean_unamortized = max(0, setup_total - used_clean_savings) if setup_known and used_clean_known else None
+    shortfall = (None if used_clean_unamortized is None or planned_unamortized is None
+                 else max(0, used_clean_unamortized - planned_unamortized))
+    regret = actual - minimum_total if actual_known and minimum_known else None
+    baseline_comparable = actual_known and baseline_known
+    if any(value is None for value in (unamortized, shortfall, regret)) or not baseline_comparable:
+        reasons.append("cannot_compare")
+    intervals = _intervals(flags)
     return dict(path_id=path.path_id, attempts=tuple(ledger), case_statuses=tuple(statuses),
         unamortized_setup_tokens=unamortized,
-        simulated_realized_regret=actual - minimum_total if comparable else None,
-        repeat_shortfall_loss_tokens=max(0, used_clean_unamortized - planned_unamortized) if comparable else None,
+        simulated_realized_regret=regret,
+        repeat_shortfall_loss_tokens=shortfall,
         winning_intervals=dict(intervals=intervals, first_strict_win=intervals[0][0] if intervals else None,
             valid_through_position=len(flags), basis="fixed_event_sequence", baseline_domain="transport",
-            baseline="legal_original_format", comparison_status="exact_local_text" if comparable else "cannot_compare")), (
+            baseline="legal_original_format", comparison_status="exact_local_text" if baseline_comparable else "cannot_compare")), (
         actual if actual_known else None), tuple(dict.fromkeys(reasons))
 
 

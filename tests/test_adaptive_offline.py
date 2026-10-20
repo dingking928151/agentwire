@@ -205,6 +205,15 @@ def test_continue_does_not_replan_later_message(api, monkeypatch, policy, want):
     assert [s["fixed_candidate"] for s in path["case_statuses"]] == ["ac1", "ac1"]
     assert obj.model_dump() == before
     assert api.simulate_scenario(obj).model_dump() == api.simulate_scenario(obj).model_dump()
+    # An unavailable fixed suffix cannot erase facts about the attempted prefix.
+    assert path["simulated_realized_regret"] == 0
+    assert path["unamortized_setup_tokens"] == 0
+    assert path["repeat_shortfall_loss_tokens"] is None
+    wins = path["winning_intervals"]
+    assert wins["comparison_status"] == "exact_local_text"
+    assert wins["intervals"] == (((1, 1),) if policy == "stop_group" else ((1, 2),))
+    assert wins["first_strict_win"] == 1
+    assert wins["valid_through_position"] == (1 if policy == "stop_group" else 2)
 
 
 @pytest.mark.parametrize("ready,want,status", [(True, [12, 13, 13], "simulated_success"),
@@ -595,3 +604,107 @@ def test_failure_overhead_is_not_reported_as_reuse_shortfall(api, monkeypatch):
     assert path["unamortized_setup_tokens"] == 30
     assert path["repeat_shortfall_loss_tokens"] == 0
     assert path["simulated_realized_regret"] == 70
+
+
+def test_unknown_alternative_minimum_preserves_known_baseline_diagnostics(api, monkeypatch):
+    # Catches coupling original-format recovery/wins to an unrelated unknown eligible alternative.
+    counter(monkeypatch)
+    unknown = resource(setup_text=None)
+    req = request(unknown, dependencies={"ac2": (unknown.identity,)})
+    result = api.simulate_scenario(scenario(api, (case(api, req),), ((outcome(api),),)))
+    path = result.paths[0]
+    assert (result.expected_tokens_numerator, result.expected_tokens_denominator) == (13, 1)
+    assert path["simulated_realized_regret"] is None
+    assert path["unamortized_setup_tokens"] == 0
+    assert path["repeat_shortfall_loss_tokens"] == 0
+    assert path["winning_intervals"]["intervals"] == ((1, 1),)
+    assert path["winning_intervals"]["comparison_status"] == "exact_local_text"
+    assert "cannot_compare" in result.reason_codes  # Only the eligible minimum is unknown.
+
+
+def test_unknown_stopped_suffix_only_invalidates_full_declaration_shortfall(api, monkeypatch):
+    # Catches an unexecuted unknown-context case erasing charged setup recovery and realized prefix regret.
+    counter(monkeypatch, setup=30)
+    cold = resource()
+    hot = cold.model_copy(update={"state": "ready"})
+    first = request(cold, dependencies={"ac1": (cold.identity,)})
+    unknown = resource(state="ready", exposure="per_request_context", context_text=None)
+    second = request(unknown, dependencies={"ac1": (unknown.identity,)})
+    schedule = tuple(api.ScheduledSnapshot(case_index=c, repeat_index=0, stage=stage,
+        snapshot=(first.snapshot if stage == "setup" else first.snapshot.model_copy(update={"resources": (hot,)}))
+        if c == 0 else second.snapshot)
+        for c in range(2) for stage in ("setup", "initial"))
+    obj = scenario(api, (case(api, first), case(api, second)),
+        ((outcome(api, success=False), outcome(api, c=1)),), schedule=schedule, policy="stop_group")
+    result = api.simulate_scenario(obj)
+    path = result.paths[0]
+    assert totals(path) == [30, 13]
+    assert (result.expected_tokens_numerator, result.expected_tokens_denominator) == (43, 1)
+    assert [s["status"] for s in path["case_statuses"]] == ["simulated_failure", "not_executed"]
+    assert path["simulated_realized_regret"] == 18
+    assert path["unamortized_setup_tokens"] == 18
+    assert path["repeat_shortfall_loss_tokens"] is None
+    assert path["winning_intervals"]["intervals"] == ()
+    assert path["winning_intervals"]["valid_through_position"] == 1
+    assert path["winning_intervals"]["comparison_status"] == "exact_local_text"
+
+
+def test_unknown_baseline_setup_preserves_known_operating_recovery(api, monkeypatch):
+    # Catches losing the known baseline variable cost just because its separate setup is unknown.
+    counter(monkeypatch)
+    unknown = resource(setup_text=None)
+    req = request(unknown, dependencies={"json": (unknown.identity,)})
+    result = api.simulate_scenario(scenario(api, (case(api, req),), ((outcome(api),),)))
+    path = result.paths[0]
+    assert (result.expected_tokens_numerator, result.expected_tokens_denominator) == (13, 1)
+    assert path["simulated_realized_regret"] is None
+    assert path["unamortized_setup_tokens"] == 0
+    assert path["repeat_shortfall_loss_tokens"] == 0
+    assert path["winning_intervals"]["comparison_status"] == "cannot_compare"
+    assert path["winning_intervals"]["valid_through_position"] == 0
+
+
+def test_unknown_later_baseline_preserves_earlier_winning_interval(api, monkeypatch):
+    # Catches erasing an already exactly evaluated winning prefix when a later baseline becomes unknown.
+    counter(monkeypatch)
+    unknown = resource(setup_text=None)
+    second = request(unknown, dependencies={"json": (unknown.identity,)})
+    obj = scenario(api, (case(api), case(api, second)), ((outcome(api), outcome(api, c=1)),))
+    path = api.simulate_scenario(obj).paths[0]
+    assert totals(path) == [13, 13]
+    assert path["simulated_realized_regret"] is None
+    assert path["unamortized_setup_tokens"] == 0
+    assert path["repeat_shortfall_loss_tokens"] == 0
+    assert path["winning_intervals"]["intervals"] == ((1, 1),)
+    assert path["winning_intervals"]["first_strict_win"] == 1
+    assert path["winning_intervals"]["valid_through_position"] == 1
+    assert path["winning_intervals"]["comparison_status"] == "cannot_compare"
+
+
+@pytest.mark.parametrize("fault_position,want_total,want_unamortized,want_regret", [
+    (None, 38, 0, 0), (0, 76, 12, 38), (1, 76, 12, 38),
+])
+def test_signed_operating_recovery_offsets_savings_with_fault_overhead(
+        api, monkeypatch, fault_position, want_total, want_unamortized, want_regret):
+    # Catches per-position clamping: +12 and -26 must net -14 before bounding recovery.
+    # Also catches unbounded negative recovery (which would report setup 26 instead of 12).
+    counter(monkeypatch, setup=12)
+    cold = resource()
+    hot = cold.model_copy(update={"state": "ready"})
+    req = request(cold, dependencies={"ac1": (cold.identity,)})
+    outcomes = tuple(o for c in range(2) for o in (
+        (outcome(api, c=c, success=False), outcome(api, "retry", False, c=c),
+         outcome(api, "fallback", c=c)) if c == fault_position else (outcome(api, c=c),)))
+    schedule = tuple(api.ScheduledSnapshot(case_index=c, repeat_index=0, stage=stage,
+        snapshot=req.snapshot if c == 0 and stage == "setup"
+        else req.snapshot.model_copy(update={"resources": (hot,)}))
+        for c in range(2) for stage in ("setup", "initial", "retry", "fallback")
+        if stage in ("setup", "initial") or c == fault_position)
+    obj = scenario(api, (case(api, req), case(api, req)), (outcomes,), schedule=schedule)
+    result = api.simulate_scenario(obj)
+    path = result.paths[0]
+    assert (result.expected_tokens_numerator, result.expected_tokens_denominator) == (want_total, 1)
+    assert [s["status"] for s in path["case_statuses"]] == ["simulated_success", "simulated_success"]
+    assert path["unamortized_setup_tokens"] == want_unamortized
+    assert path["repeat_shortfall_loss_tokens"] == 0
+    assert path["simulated_realized_regret"] == want_regret
