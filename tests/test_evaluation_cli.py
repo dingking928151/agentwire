@@ -146,6 +146,23 @@ def test_eval_default_is_ac1_only(tmp_path, offline_guards):
     assert_matrix(output, ["ac1"], 30)
 
 
+def test_each_input_is_read_once_for_hash_and_parse(tmp_path, monkeypatch, offline_guards):
+    # Catches re-reading an input for parsing after hashing a separate snapshot.
+    read_counts = {path.resolve(): 0 for path in INPUTS.values()}
+    original_read_bytes = Path.read_bytes
+
+    def counted_read_bytes(path):
+        resolved = path.resolve()
+        if resolved in read_counts:
+            read_counts[resolved] += 1
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", counted_read_bytes)
+    result = invoke(args_for(tmp_path / "single-snapshot"), offline_guards)
+    assert result.exit_code == 0
+    assert read_counts == {path.resolve(): 1 for path in INPUTS.values()}
+
+
 def test_eval_ac2_requires_explicit_selection(tmp_path, offline_guards):
     output = tmp_path / "four"
     result = invoke([*args_for(output), "--formats", "ac2,json,natural_language,ac1"], offline_guards)
