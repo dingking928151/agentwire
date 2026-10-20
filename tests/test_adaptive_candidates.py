@@ -97,6 +97,34 @@ def test_non_null_domain_keeps_json_metadata():
     assert '"dictionary_version":"v1"' in result[0].payload
 
 
+def test_valid_dictionary_requires_explicit_enablement(monkeypatch):
+    # Removing dictionary_not_enabled must not silently opt into a valid dictionary.
+    module = candidates_module()
+    req = request(message("v1"), allowlist=CANDIDATE_IDS,
+                  dictionary=selection(enabled=False))
+    rendered = []
+    real_render = module.render_input
+
+    def record_render(source, declared_format, selected):
+        rendered.append(declared_format + ("_dictionary" if selected is not None else ""))
+        return real_render(source, declared_format, selected)
+
+    monkeypatch.setattr(module, "render_input", record_render)
+    result = module.build_candidates(req)
+    json_candidate = result[0]
+    assert json_candidate.eligibility == "eligible"
+    assert json_candidate.reason_codes == ()
+    restored = parse_input(json_candidate.payload, "json", "synthetic-user", None)
+    assert restored.dictionary_version == "v1"
+    assert restored.model_dump() == req.message.model_dump()
+    assert req.message.dictionary_version == "v1"
+    for item in result[3:]:
+        assert item.eligibility == "unavailable"
+        assert item.payload is None
+        assert item.reason_codes == ("dictionary_not_enabled",)
+    assert rendered == ["json"]
+
+
 @pytest.mark.parametrize("conflict", ["owner", "hash", "version", "schema", "message_schema"])
 @pytest.mark.parametrize("enabled", [False, True])
 def test_explicit_conflict_wins_over_json_and_missing_meter(conflict, enabled):
@@ -299,20 +327,53 @@ def test_no_selected_dictionary_keeps_json_and_marks_dictionary_unavailable(vers
         assert all(item.payload is None for item in result[1:])
 
 
-def test_required_resources_are_carried_and_invalid_dependency_has_no_payload():
+@pytest.mark.parametrize("candidate_id", CANDIDATE_IDS)
+def test_required_resources_are_carried_and_invalid_dependency_has_no_payload(candidate_id, monkeypatch):
+    # Bypassing invalid-resource gating for any candidate must expose its payload.
     identity = dict(scope_id="scope", receiver_id="receiver", user_id="synthetic-user",
                     resource_kind="schema", version="v1", content_hash="synthetic-hash",
                     tokenizer_profile_id="synthetic-profile")
-    req = request()
-    capabilities = req.capabilities.model_copy(update={"candidate_resources": {"ac1": (identity,)}})
+    version = "v1" if candidate_id.endswith("_dictionary") else None
+    req = request(message(version), allowlist=CANDIDATE_IDS, dictionary=selection())
+    capabilities = req.capabilities.model_copy(update={"candidate_resources": {candidate_id: (identity,)}})
     snapshot = req.snapshot.model_copy(update={"resources": (dict(
         identity=identity, state="invalid", exposure="once_per_scope", epoch=0,
         valid_through_repeat=None, readiness_basis=None, setup_text=None, context_text=None,
     ),)})
     req = freeze_request(req.model_copy(update={"capabilities": capabilities, "snapshot": snapshot}))
-    result = candidates_module().build_candidates(req)
-    assert result[0].eligibility == "eligible"
-    assert result[1].eligibility == "unavailable"
-    assert result[1].payload is None
-    assert result[1].reason_codes == ("resource_invalid",)
-    assert result[1].required_resources == req.capabilities.candidate_resources["ac1"]
+    module = candidates_module()
+    rendered = []
+    real_render = module.render_input
+
+    def record_render(source, declared_format, selected):
+        rendered.append(declared_format + ("_dictionary" if selected is not None else ""))
+        return real_render(source, declared_format, selected)
+
+    monkeypatch.setattr(module, "render_input", record_render)
+    result = module.build_candidates(req)
+    target = next(item for item in result if item.candidate_id == candidate_id)
+    assert target.eligibility == "unavailable"
+    assert target.payload is None
+    assert target.reason_codes == ("resource_invalid",)
+    assert tuple(resource.model_dump() for resource in target.required_resources) == (identity,)
+    assert candidate_id not in rendered
+
+    eligible_in_domain = ("json", "ac1", "ac2") if version is None else (
+        "json", "ac1_dictionary", "ac2_dictionary",
+    )
+    for item in result:
+        if item.candidate_id == candidate_id:
+            continue
+        assert item.required_resources == ()
+        assert "resource_invalid" not in item.reason_codes
+        if item.candidate_id in eligible_in_domain:
+            assert item.eligibility == "eligible"
+            assert item.payload is not None
+            assert item.reason_codes == ()
+        else:
+            assert item.eligibility == "unavailable"
+            assert item.payload is None
+            assert item.reason_codes == (("dictionary_version_null",) if version is None else (
+                "dictionary_required",
+            ))
+    assert rendered == [item for item in eligible_in_domain if item != candidate_id]
