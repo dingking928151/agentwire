@@ -220,6 +220,138 @@ Fallback costs include any already transmitted encoded payload plus a compact or
 
 The local renderer is pinned to the [SamoTech/DRIXL v0.3.0 README](https://github.com/SamoTech/DRIXL/blob/v0.3.0/README.md) compact envelope/body notation: `@to:WORKER @fr:COORD @t:REQ|RES|FIN @p:MED`, then a `ROUT` body with `[key:value]` parameters. This project's percent-escaped compact-JSON values and canonical-field mapping are benchmark choices, not a claim about upstream escaping/schema support. Fixed routing and priority are overhead, never executable instructions. No third-party `drixl` package is installed or imported; no shared-context savings, library runtime behavior, or interoperability is claimed.
 
+## Run the offline mock evaluation
+
+**Mock only checks pipeline behavior, not model understanding.** `evaluate-offline` strictly parses an input representation and returns a read-only `inspect_message_v1` receipt with the recovered message, its hash, and `actions=[]`. The scorer independently validates that receipt and compares all eleven fields with a private oracle. It does not perform the message's original business task, open its URLs or evidence files, execute commands, or interpret approval/status as permission. Pipeline completion is not business-task completion.
+
+The `natural_language` input is **fixed eleven-field tagged text containing JSON literals**, emitted by the existing renderer. Its parser requires every label in order and consumes the entire input; this is not arbitrary natural-language understanding. JSON, AC1, and explicitly selected AC2 use strict parsers too. Hard-field equality is an **exact-match proxy**, not semantic safety. These mock scores establish neither real provider performance, API billing savings, nor general token savings; all earlier token results and negative conclusions above remain unchanged.
+
+### Commands and matrix selection
+
+Use the existing local `.venv` and provisioned dependencies; this evaluation does not initialize a tokenizer or download vocabularies. Run from the repository root, with no installation or service startup:
+
+```sh
+export PYTHONDONTWRITEBYTECODE=1
+export PYTHONPATH="$PWD/src"
+
+# Default: AC1 only, no dictionary pairs, 30 cases per group (60 total).
+# mktemp creates a fresh empty directory; never delete unknown output to reuse it.
+DEFAULT_OUT=$(mktemp -d /tmp/agentcodec-offline-default-XXXXXX)
+.venv/bin/python -m agentcodec.cli evaluate-offline \
+  --adapter mock-v1 \
+  --diverse-input bench/tasks.v1.jsonl \
+  --repetitive-input bench/tasks-repetitive.v1.jsonl \
+  --repetitive-dictionary bench/dictionaries/repeat-v1.json \
+  --output-dir "$DEFAULT_OUT"
+
+# Explicit four formats plus paired dictionaries, independently run twice.
+EVAL_A=$(mktemp -d /tmp/agentcodec-offline-paired-a-XXXXXX)
+EVAL_B=$(mktemp -d /tmp/agentcodec-offline-paired-b-XXXXXX)
+for OUT in "$EVAL_A" "$EVAL_B"; do
+  .venv/bin/python -m agentcodec.cli evaluate-offline \
+    --adapter mock-v1 \
+    --diverse-input bench/tasks.v1.jsonl \
+    --repetitive-input bench/tasks-repetitive.v1.jsonl \
+    --repetitive-dictionary bench/dictionaries/repeat-v1.json \
+    --formats natural_language,json,ac1,ac2 --dictionary-pairs paired \
+    --output-dir "$OUT" || exit 1
+done
+for FILE in manifest.json records.jsonl report.json; do
+  cmp "$EVAL_A/$FILE" "$EVAL_B/$FILE" || exit 1
+done
+export EVAL_A
+```
+
+All three local input paths, `--adapter mock-v1`, and `--output-dir` are required. CLI `--formats` defaults to `ac1`; `--dictionary-pairs` defaults to `none`. AC2 is never implicitly enabled. Formats must be unique comma-separated members of `natural_language,json,ac1,ac2`. Only the production deterministic mock is exposed: its record identity is `deterministic-mock-v1`. The identity `scripted-mock-test-v1` is test-only and is rejected by the production CLI; there is no provider, endpoint, model, key, network, retry, or fallback option.
+
+| Selection | Conditions in each separate group | Cases per group | Total attempt records on clean inputs |
+| --- | --- | ---: | ---: |
+| Default (omit formats/pairs) | `ac1` | 30 | 60 |
+| Four explicit formats, pairs `none` | `natural_language`, `json`, `ac1`, `ac2` | 120 | 240 |
+| Four explicit formats, pairs `paired` | Above plus `ac1_dictionary`, `ac2_dictionary` | 180 | 360 |
+
+For the four-format/no-pair run, change `paired` to `none` and use another fresh output directory. Pairing adds only already-selected codecs; default AC1 plus `paired` adds `ac1_dictionary`, not AC2. `diverse` and `repetitive` retain 30 source messages each, never a blended quality average or deduplicated set of task strings. Each codec pair uses its group's same dictionary: built-in `demo-user/demo-v1` for diverse, supplied `repeat-user/repeat-v1` for repetitive. Dictionary selection fills only a null version on a transport copy; existing non-null versions remain unchanged, even if strict codec validation then rejects them. `metadata_selection` records that choice; source inputs remain read-only.
+
+### Three output files, not a success verdict
+
+The CLI checks strict UTF-8, fixed approved input hashes, 30 unique source IDs per group, dictionary ownership, and an absent/empty output directory before creating output. It hashes and parses each input from one byte snapshot. A successful run is silent and exits **0 only after all three files are written**; this means report generation completed, not that all cases passed. Read `acceptance_passed`. Configuration/I/O errors exit **1**; usage errors exit **2**. Non-empty output directories are not overwritten. Failed writes attempt to remove only this run's partial files, preserving unrelated data; this is not a power-loss transaction. Missing any of the three files means an incomplete result.
+
+| File | Version and contents |
+| --- | --- |
+| `manifest.json` | `manifest_version=offline-eval-manifest-v1`; `contract_version` and `scorer_version` are `offline-eval-v1`; adapter identity, local `code_revision`, input hashes/counts, selected formats/conditions, dictionary snapshots/hashes, policies, hard fields, metadata rules, case snapshots, disclaimer and `run_id`. |
+| `records.jsonl` | One `record_version=offline-eval-v1` attempt per line; case/record IDs, actual request/payload/hash, raw response, decoded message, metadata selection, error, transition and score. Receipt version is `mock-receipt-v1`. |
+| `report.json` | `report_version=offline-eval-report-v1`, `adapter_kind=mock`, `pipeline_only=true`, disclaimer, `acceptance_contract=clean-v1`, `acceptance_passed`, and separate `scenarios.diverse.conditions` / `scenarios.repetitive.conditions`. |
+
+Core JSON uses UTF-8, sorted keys, compact separators, no Unicode normalization, and one trailing LF per document/JSONL record. List order/duplicates and whitespace in values are preserved. `run_id` hashes the canonical manifest without its own ID; no wall-clock time, machine name, duration, or output path is included. The CLI's only revision subprocess is fixed local `git rev-parse HEAD`; it does not consult remotes. Byte reproducibility requires the same inputs, options **and revision**. A documentation-only commit also changes that revision/run ID, so do not compare pre-commit and post-commit artifacts as if their manifests were identical.
+
+### Read the five metrics separately
+
+For each scenario/condition, let **N = `logical_case_count`**, not `attempt_count`. `initial` takes attempt 0; `final` takes the terminal attempt. They are never pooled. Normal/retry attempts compare against transport; a test-enabled original-JSON fallback compares against source. `case_results[].final_oracle` and `terminal_record_id` expose that choice; attempt metadata retains the original dictionary selection. Recovery cannot erase a first failure.
+
+| Category | Numerator and denominator |
+| --- | --- |
+| Decode / field fidelity | `decode_success_count/N`, `full_message_equal_count/N`; each `field_equal_counts[field]/N`; `equal_field_total/(11*N)` is `field_fidelity_rate`. Failed/unrecovered messages contribute zero equal fields, not exclusion from N. `unrecovered_field_count` also uses `11*N`. |
+| Hard constraints | `equal_hard_total/(6*N)` is `hard_field_preservation_rate`. The six fields are `task`, `blocker`, `next_step`, `evidence`, `constraints`, `approval_required`. `hard_constraint_case_pass_count/N` requires all six equal. `changed_hard_field_count` and `unrecovered_hard_field_count` are disjoint field counts with denominator `6*N`; their sum is hard-field loss. No semantic inference is made. |
+| Mock task completion | `mock_task_completed_count/N`: valid receipt, correct operation/hash, all eleven fields exactly equal, and empty actions. Source `status=completed` is not success evidence; `cancelled` does not prevent a correct read-only inspection. |
+| Fallback | Condition-level `fallback_required_case_count/N`, `fallback_performed_case_count/N`, `fallback_recovered_case_count/N` are separate. Retaining original data is not a performed fallback. Phase-level required counts describe that selected attempt; condition-level required counts mean any attempt required it. |
+| Retry | `retried_case_count/N`; `retry_attempt_count` is a raw count of extra same-format/same-payload calls, not a denominator. `retry_recovered_case_count/retried_case_count` is `retry_recovered_case_rate`. Sending original JSON is fallback, not retry. |
+
+JSON retains explicit `*_denominator` and `*_rate` keys (per-field denominators/rates are maps). Rates with a true zero denominator are `null`, never a fabricated 100%; decode failures still belong in N. The CLI fixes policy to `record_only`, `max_retries=0`: failed cases remain visible, with no extra calls. Dedicated local tests, not the clean matrix, exercise at most one retry and one original-JSON fallback (three attempts maximum), including failed recovery, malformed receipts, negation/budget/date/approval changes, dictionary errors, and no-execution/network sentinels. These regression guards are not an OS sandbox or proof of semantic safety.
+
+For the paired run above, this report-reading check uses actual schema keys and keeps the groups and phases separate:
+
+```sh
+.venv/bin/python - <<'PY'
+import json
+import os
+from pathlib import Path
+p = Path(os.environ['EVAL_A'])
+r = json.loads((p / 'report.json').read_text(encoding='utf-8'))
+m = json.loads((p / 'manifest.json').read_text(encoding='utf-8'))
+assert r['report_version'] == 'offline-eval-report-v1'
+assert r['pipeline_only'] is True and r['adapter_kind'] == 'mock'
+assert r['acceptance_contract'] == 'clean-v1' and r['acceptance_passed'] is True
+assert set(r['scenarios']) == {'diverse', 'repetitive'}
+for name in ('diverse', 'repetitive'):
+    scenario = r['scenarios'][name]
+    assert m['scenario_counts'][name] == 30
+    assert set(scenario['conditions']) == {
+        'natural_language', 'json', 'ac1', 'ac2', 'ac1_dictionary', 'ac2_dictionary'}
+    for condition, c in scenario['conditions'].items():
+        assert c['logical_case_count'] == c['attempt_count'] == 30
+        for phase in ('initial', 'final'):
+            s = c[phase]
+            assert s['decode_success_count'] == s['full_message_equal_count'] == 30
+            assert s['equal_field_total'] == s['field_fidelity_denominator'] == 330
+            assert s['equal_hard_total'] == s['hard_field_preservation_denominator'] == 180
+            assert s['changed_hard_field_count'] == s['unrecovered_hard_field_count'] == 0
+            assert s['mock_task_completed_count'] == s['mock_task_completed_denominator'] == 30
+            print(name, condition, phase, s['mock_task_completed_count'], '/', s['mock_task_completed_denominator'])
+        assert all(c[k] == 0 for k in (
+            'fallback_required_case_count', 'fallback_performed_case_count',
+            'fallback_recovered_case_count', 'retried_case_count',
+            'retry_attempt_count', 'retry_recovered_case_count'))
+        assert c['retry_recovered_case_denominator'] == 0
+        assert c['retry_recovered_case_rate'] is None
+records = [json.loads(line) for line in (p / 'records.jsonl').read_text(encoding='utf-8').split('\n') if line]
+assert len(records) == len({x['record_id'] for x in records}) == 360
+assert all(x['request']['attempt_index'] == 0 for x in records)
+print('clean-v1 pipeline acceptance only; not model understanding or business success')
+PY
+```
+
+### Local verification and future API boundary
+
+```sh
+.venv/bin/python -m pytest tests/test_evaluation_contracts.py tests/test_evaluation_formats.py tests/test_evaluation_mock.py tests/test_evaluation_scoring.py tests/test_evaluation_runner.py tests/test_evaluation_cli.py -q
+.venv/bin/python -m pytest -q
+sha256sum bench/tasks.v1.jsonl bench/tasks-repetitive.v1.jsonl bench/dictionaries/repeat-v1.json
+```
+
+Full regression tests still require the already-provisioned tokenizer caches used by the old benchmarks; if dependencies/caches are absent, stop and report the block rather than install or download. Approved input hashes, detailed acceptance commands, and scope are in the [offline evaluation design](docs/superpowers/specs/2026-10-20-agentcodec-offline-evaluation-design.md) and [implementation plan](docs/superpowers/plans/2026-10-20-agentcodec-offline-evaluation.md). Local verification results are recorded in the plan, not substituted for real-model evidence.
+
+**Real provider/API evaluation remains unauthorized and unimplemented.** It requires separate explicit approval of the provider/endpoint and exact model/version, the fields/corpus/prompts/dictionaries sent out, and a currency-denominated **hard spending limit**. That proposal must also fix request/concurrency/retry and token limits, stop rules, data-retention/training policy, and log location. Offline approval grants no permission to obtain credentials, probe services, send data, or spend money. Real business-task gold and safety criteria would need their own design; mock completion cannot stand in for them.
+
 ## Limits
 
 This MVP has no encryption, authentication, authorization, automatic dictionary updates, semantic compression, real-user corpus, model evaluation, action execution, online integration, network service, or deployment. Namespace checks are local metadata checks only. Inputs are read into memory without resource quotas; run untrusted large inputs with external resource limits. Protect message/dictionary/report files and stderr because they may contain private data. AC1 remains the default; AC2 is opt-in and experimental. Both carry only canonical `MessageV1` fields. See the [original design](docs/superpowers/specs/2026-10-19-agentcodec-design.md) and [approved AC2 experiment design](docs/superpowers/specs/2026-10-19-agentcodec-ac2-experiment-design.md) for the full boundary.
