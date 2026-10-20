@@ -252,6 +252,42 @@ def test_changed_and_unrecovered_hard_fields_do_not_overlap():
 
 def test_empty_scores_have_zero_denominators_and_null_rates():
     report = aggregate_scores([])
+    assert set(report) == {
+        "logical_case_count",
+        "field_equal_counts",
+        "field_equal_denominators",
+        "field_equal_rates",
+        "decode_success_count",
+        "decode_success_denominator",
+        "decode_success_rate",
+        "full_message_equal_count",
+        "full_message_equal_denominator",
+        "full_message_equal_rate",
+        "equal_field_total",
+        "field_fidelity_denominator",
+        "field_fidelity_rate",
+        "unrecovered_field_count",
+        "unrecovered_field_denominator",
+        "unrecovered_field_rate",
+        "equal_hard_total",
+        "hard_field_preservation_denominator",
+        "hard_field_preservation_rate",
+        "hard_constraint_case_pass_count",
+        "hard_constraint_case_pass_denominator",
+        "hard_constraint_case_pass_rate",
+        "changed_hard_field_count",
+        "changed_hard_field_denominator",
+        "changed_hard_field_rate",
+        "unrecovered_hard_field_count",
+        "unrecovered_hard_field_denominator",
+        "unrecovered_hard_field_rate",
+        "mock_task_completed_count",
+        "mock_task_completed_denominator",
+        "mock_task_completed_rate",
+        "fallback_required_case_count",
+        "fallback_required_case_denominator",
+        "fallback_required_case_rate",
+    }
     assert report["logical_case_count"] == 0
     for key, value in report.items():
         if key in ("field_equal_counts", "field_equal_denominators"):
