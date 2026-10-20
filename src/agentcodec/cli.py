@@ -1,6 +1,9 @@
 """Offline file/stdin CLI. Messages are untrusted data, never actions."""
 
+import hashlib
 import json
+import os
+import subprocess
 import sys
 from contextlib import contextmanager
 from enum import Enum
@@ -13,7 +16,10 @@ from .ac2 import encode_message_ac2
 from .benchmark import DEMO_DICTIONARY, BenchmarkScenario, load_tasks, run_benchmark, run_benchmark_suite
 from .codec import FallbackRequired, decode_payload, encode_message
 from .dictionary import load_dictionary
-from .schema import MessageV1
+from .evaluation.contracts import canonical_json
+from .evaluation.mock import DeterministicMockAdapter
+from .evaluation.runner import build_cases, run_offline_evaluation
+from .schema import MessageV1, UserDictionary
 
 app = typer.Typer(help="Offline AgentCodec: encode, decode, validate, and estimate token costs.",
                   add_completion=False, pretty_exceptions_enable=False)
@@ -150,6 +156,130 @@ def benchmark_suite(
         }
         report = run_benchmark_suite(scenarios, ["o200k_base", "cl100k_base"])
         _write(report.model_dump_json(indent=2), output)
+
+
+_OFFLINE_HASHES = {
+    "diverse": "9284dc0b7a878355c6e8ddc0195cd7adcade9b4966dc3a07aeb58f2f1f2ad7b8",
+    "repetitive": "f5c8d2d98837edd5944f10e6fb7a63bd44dfcff6b022aab57502b2197cd239fe",
+    "repetitive_dictionary": "9b320df2e125804c07dc53418164633345c4d26ff4e56406e42b3fcd94338d86",
+}
+
+
+def _offline_text(path: Path, name: str) -> str:
+    # Hash and parse the same snapshot, never a second read of a changing file.
+    data = path.read_bytes()
+    text = data.decode("utf-8")
+    if hashlib.sha256(data).hexdigest() != _OFFLINE_HASHES[name]:
+        raise ValueError(f"{name} input hash does not match the approved corpus")
+    return text
+
+
+def _offline_tasks(text: str) -> list[MessageV1]:
+    tasks = [_message(line) for line in text.split("\n") if line.strip()]
+    if len(tasks) != 30 or len({task.message_id for task in tasks}) != 30:
+        raise ValueError("offline scenario requires exactly 30 unique messages")
+    return tasks
+
+
+def _offline_output_preflight(output_dir: Path):
+    if output_dir.exists():
+        if not output_dir.is_dir() or any(output_dir.iterdir()):
+            raise ValueError("output directory must be absent or empty")
+        parent = output_dir
+    else:
+        parent = output_dir.parent
+        while not parent.exists():
+            parent = parent.parent
+    if not parent.is_dir() or not os.access(parent, os.W_OK | os.X_OK):
+        raise ValueError("output directory parent must be a writable directory")
+
+
+def _offline_revision() -> str:
+    try:
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parents[2],
+            check=True, capture_output=True, text=True, encoding="utf-8",
+        ).stdout.strip()
+    except subprocess.SubprocessError as error:
+        raise ValueError("cannot read the local git revision") from error
+
+
+def _offline_write(output_dir: Path, artifacts: dict[str, bytes]):
+    # Recheck after computation; exclusive creation never overwrites user files.
+    _offline_output_preflight(output_dir)
+    created = []
+    created_directory = False
+    try:
+        if not output_dir.exists():
+            output_dir.mkdir(parents=True)
+            created_directory = True
+        for name, data in artifacts.items():
+            path = output_dir / name
+            stream = path.open("xb")
+            created.append(path)
+            with stream:
+                stream.write(data)
+    except OSError:
+        for path in reversed(created):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        if created_directory:
+            try:
+                output_dir.rmdir()  # Only remove our directory if it is still empty.
+            except OSError:
+                pass
+        raise
+
+
+@app.command("evaluate-offline")
+def evaluate_offline(
+    adapter: Annotated[str, typer.Option("--adapter", help="Required local adapter: mock-v1 only.")],
+    diverse_input: Annotated[Path, typer.Option("--diverse-input", help="Approved diverse UTF-8 JSONL.")],
+    repetitive_input: Annotated[Path, typer.Option("--repetitive-input", help="Approved repetitive UTF-8 JSONL.")],
+    repetitive_dictionary: Annotated[Path, typer.Option("--repetitive-dictionary", help="Approved manual dictionary JSON.")],
+    output_dir: Annotated[Path, typer.Option("--output-dir", help="Absent or empty local output directory.")],
+    formats: Annotated[str, typer.Option("--formats", help="Comma-separated natural_language,json,ac1,ac2; AC2 is opt-in.")] = "ac1",
+    dictionary_pairs: Annotated[str, typer.Option("--dictionary-pairs", help="none or paired; selected codecs only.")] = "none",
+):
+    """Evaluate a deterministic local mock pipeline, not model understanding."""
+    if adapter != "mock-v1":
+        raise typer.BadParameter("only mock-v1 is supported", param_hint="--adapter")
+    selected = tuple(formats.split(","))
+    if len(set(selected)) != len(selected) or any(
+        name not in ("natural_language", "json", "ac1", "ac2") for name in selected
+    ):
+        raise typer.BadParameter("select unique known formats", param_hint="--formats")
+    if dictionary_pairs not in ("none", "paired"):
+        raise typer.BadParameter("select none or paired", param_hint="--dictionary-pairs")
+    with _errors():
+        diverse = _offline_tasks(_offline_text(diverse_input, "diverse"))
+        repetitive = _offline_tasks(_offline_text(repetitive_input, "repetitive"))
+        dictionary = UserDictionary.model_validate(json.loads(
+            _offline_text(repetitive_dictionary, "repetitive_dictionary"),
+            object_pairs_hook=_unique_object,
+        ), strict=True)
+        if dictionary.user_id != repetitive[0].user_id:
+            raise ValueError("dictionary user does not match repetitive scenario")
+        _offline_output_preflight(output_dir)
+        scenarios = {
+            "diverse": BenchmarkScenario(tasks=diverse, dictionary=DEMO_DICTIONARY),
+            "repetitive": BenchmarkScenario(tasks=repetitive, dictionary=dictionary),
+        }
+        revision = _offline_revision()
+        manifest, records, report = run_offline_evaluation(
+            build_cases(scenarios, selected, dictionary_pairs),
+            DeterministicMockAdapter(), dict(_OFFLINE_HASHES), revision,
+        )
+        # Finish computation and UTF-8 serialization before creating any output.
+        artifacts = {
+            "manifest.json": (canonical_json(manifest) + "\n").encode("utf-8"),
+            "records.jsonl": "".join(canonical_json(record.model_dump()) + "\n"
+                                     for record in records).encode("utf-8"),
+            "report.json": (canonical_json(report) + "\n").encode("utf-8"),
+        }
+        _offline_write(output_dir, artifacts)
 
 
 if __name__ == "__main__":
