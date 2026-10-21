@@ -405,6 +405,13 @@ def _run(config):
         manifest_scenarios.append(dict(scenario_index=index,
             corpus_id=corpus_labels[config.scenario_corpora[scenario.scenario_id]], acceptance_role=role,
             profiles=[scenario.cases[0].request.tokenizer.model_dump()] if scenario.cases else [],
+            effective_capabilities=scenario.cases[0].request.capabilities.model_dump(),
+            capability_epoch_source="scheduled_snapshot_epoch",
+            dictionary_selection=dict(enabled=scenario.cases[0].request.dictionary.enabled,
+                content_hash=scenario.cases[0].request.dictionary.content_hash,
+                dictionary_identity=None if scenario.cases[0].request.dictionary.dictionary is None else dict(
+                    user_id=scenario.cases[0].request.dictionary.dictionary.user_id,
+                    version=scenario.cases[0].request.dictionary.dictionary.version)),
             renderer_version="adaptive-text-v1", policy_version="adaptive-policy-v1", comparison_domain=domain,
             metadata_domains=[dict(source_dictionary_version=c.source_message.dictionary_version,
                 transport_dictionary_version=c.request.message.dictionary_version, metadata_authorized=c.metadata_authorized)

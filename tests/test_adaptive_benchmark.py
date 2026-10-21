@@ -3,6 +3,7 @@
 The opt-in local validation entry point at the bottom reads approved fixtures
 without returning their text. It is not a substitute-tokenizer pytest test.
 """
+from collections import Counter
 from contextlib import contextmanager
 import hashlib
 import importlib
@@ -11,6 +12,7 @@ import json
 from pathlib import Path
 import socket
 import subprocess
+from unittest.mock import patch
 
 import pytest
 
@@ -413,6 +415,47 @@ def test_independent_audit_does_not_trust_sdk_cost_table(tmp_path, synthetic_cou
     assert out.report["acceptance_passed"] is False
 
 
+def _require_matrix_success(rows):
+    """Acceptance gate for this fixed approved matrix, not a generic benchmark."""
+    # Independent literal coverage contract; do not derive this from `plans`.
+    clean_dimensions = (
+        ("builtin", "builtin", "conservative", 1, 1),
+        ("builtin", "builtin", "all", 1, 1),
+        ("builtin", "builtin", "all", 1, 0),
+        ("builtin", "builtin", "all", 1, 10),
+        ("builtin", "builtin", "all", 1, 50),
+        ("once_per_scope", "cold", "all", 1, 1),
+        ("once_per_scope", "ready", "all", 1, 1),
+        ("per_request_context", "ready", "all", 1, 1),
+        ("builtin", "builtin", "all", 2, 1),
+    )
+    patterns = []
+    for domain in ("source", "transport"):
+        patterns.extend((domain, *dims, "clean", None, None, 0) for dims in clean_dimensions)
+        patterns.append((domain, "builtin", "builtin", "all", 1, 1, "ablation", None, None, 0))
+        fixed = ("json", "ac1", "ac2") if domain == "source" else ("json", "ac1_dictionary", "ac2_dictionary")
+        patterns.extend((domain, "builtin", "builtin", "all", 1, 1, "fixed", candidate, None, 0)
+                        for candidate in fixed)
+    patterns.extend(("source", "once_per_scope", "cold", "all", 1, 1, "negative",
+                     "ac2" if fault == "invalid" else None, fault, 0)
+                    for fault in ("continue", "stop", "invalid"))
+    patterns.append(("source", "builtin", "builtin", "all", 1, 1, "policy", None, None, 100000))
+    keys = ("domain", "exposure", "state", "allowlist", "sdk_repeat_count", "whole_corpus_repeats",
+            "role", "fixed_candidate", "fault", "min_savings_tokens")
+    if len(rows) != 120 or [r["group_index"] for r in rows] != list(range(120)):
+        raise RuntimeError("local matrix coverage failure")
+    for corpus in ("diverse", "repetitive"):
+        for tokenizer in ("o200k_base", "cl100k_base"):
+            bucket = [r for r in rows if r["corpus_id"] == corpus and r["tokenizer"] == tokenizer]
+            if Counter(tuple(r[k] for k in keys) for r in bucket) != Counter(patterns):
+                raise RuntimeError("local matrix coverage failure")
+    clean = [r for r in rows if r["role"] == "clean" and r["whole_corpus_repeats"] > 0]
+    if (len(clean) != 64 or any(r["acceptance_passed"] is not True for r in clean)
+            or any(r["logical_case_count"] != 30 * r["whole_corpus_repeats"] for r in rows)
+            or sum(r["logical_case_count"] for r in rows) != 17280):
+        raise RuntimeError("local matrix acceptance or denominator failure")
+
+
 def run_approved_local_matrix(root, revision):
     """Approved, finite validation; never a test-fixture substitute or downloader.
 
@@ -422,12 +465,12 @@ def run_approved_local_matrix(root, revision):
     are checked before AND after the session. Production meter is unchanged.
     All new pytest tests above remain synthetic-only.
     """
-    from unittest.mock import patch
     from agentcodec.benchmark import DEMO_DICTIONARY, PROTOCOL_INSTRUCTIONS, AC2_PROTOCOL_INSTRUCTIONS
     from agentcodec.adaptive.benchmark import BenchmarkInput, AdaptiveBenchmarkConfig, run_adaptive_benchmark
     root = Path(root)
-    outdir = root / ".superpowers/sdd/2026-10-20-agentcodec-adaptive-routing/task-8-matrix"
-    outdir.mkdir(exist_ok=True)
+    # A safe revision-derived directory preserves the initial run and its links.
+    outdir = root / ".superpowers/sdd/2026-10-20-agentcodec-adaptive-routing/task-8-matrix-runs" / sha(revision.encode())
+    outdir.mkdir(parents=True, exist_ok=True)
     initial_hashes = {}
     groups = clean_groups = positions = 0
     all_clean = True
@@ -465,6 +508,8 @@ def run_approved_local_matrix(root, revision):
                 dictionary_sha256=dhash, dictionary_source=dsource)
             for name in ("o200k_base", "cl100k_base"):
                 prof = profile(name)
+                if prof.encoding_name != name:
+                    raise RuntimeError("local matrix effective profile coverage failure")
                 # Missing/corrupt provisioned cache blocks this validation outright.
                 with real_get_encoding(prof) as real_encoding:
                     @contextmanager
@@ -576,27 +621,35 @@ def run_approved_local_matrix(root, revision):
                                     canonical_text(m.model_dump()) in public for m in messages):
                                 raise RuntimeError("local matrix projection failure")
                             group = first.report["scenarios"]["0"]
+                            if group["logical_case_count"] != len(scene.cases) * repeats:
+                                raise RuntimeError("local matrix logical denominator failure")
                             groups += 1
                             positions += group["logical_case_count"]
                             if role == "clean" and repeats:
+                                if first.report["acceptance_passed"] is not True:
+                                    raise RuntimeError("local matrix clean acceptance failure")
                                 clean_groups += 1
                                 all_clean = all_clean and first.report["acceptance_passed"]
                             write_artifacts(groups - 1, first)
-                            summary_rows.append(dict(group_index=groups - 1, corpus_id=corpus, tokenizer=name,
+                            summary_rows.append(dict(group_index=groups - 1, corpus_id=corpus, tokenizer=prof.encoding_name,
                                 domain="transport" if domain else "source", exposure=exposure, state=state,
                                 allowlist=allow, sdk_repeat_count=sdk, whole_corpus_repeats=repeats, role=role,
+                                fixed_candidate=fixed, fault=fault, min_savings_tokens=threshold,
                                 acceptance_passed=first.report["acceptance_passed"],
                                 logical_case_count=group["logical_case_count"],
                                 predicted_regret=group["predicted_regret"],
                                 simulated_realized_regret=group["simulated_realized_regret"],
                                 repeat_shortfall_loss_tokens=group["repeat_shortfall_loss_tokens"]))
                             if groups % 8 == 0:
-                                print(f"local matrix: {groups} isolated groups verified", flush=True)
+                                print(f"local matrix: {groups} isolated groups processed", flush=True)
                 # Real original context exits here and verifies cache/library/encoder unchanged.
                 print(f"local matrix: tokenizer session verified; {groups} groups complete", flush=True)
         if any(sha(path.read_bytes()) != digest for path, digest in initial_hashes.items()):
             raise RuntimeError("local matrix input immutability failure")
-        summary = dict(groups=groups, clean_groups=clean_groups, logical_positions=positions,
+        _require_matrix_success(summary_rows)
+        if groups != 120 or clean_groups != 64 or positions != 17280 or all_clean is not True:
+            raise RuntimeError("local matrix expected clean denominator failure")
+        summary = dict(code_revision=revision, groups=groups, clean_groups=clean_groups, logical_positions=positions,
             all_clean_acceptance_passed=all_clean, deterministic=True, inputs_unchanged=True,
             corpora_counts=[30, 30], real_local_tokenizers=2,
             validation_meter="real_encode_ordinary_with_session_integrity_verification", groups_separate=summary_rows)
@@ -691,6 +744,162 @@ def test_reinitialization_counts_each_explicit_epoch_setup(tmp_path, synthetic_c
     assert totals["simulated_tokens"] == 40
     assert totals["paths"][0]["attempt_kind_tokens"]["setup"] == 24
     assert [r["fixed_candidate"] for r in out.records] == ["ac1", "ac1"]
+
+
+def test_controlled_manifest_distinguishes_effective_candidate_bindings(tmp_path, synthetic_counter):
+    # Catches discarding cost/eligibility bindings when snapshots and public results are identical.
+    inp = fixture_input(tmp_path)
+    req = request(resource_text=SECRET)
+    first = req.snapshot.resources[0]
+    second = first.model_copy(update={"identity": first.identity.model_copy(update={
+        "resource_kind": "second-schema", "content_hash": "2" * 64})})
+    req = req.model_copy(update={"snapshot": req.snapshot.model_copy(update={"resources": (first, second)})})
+    bindings = dict(req.capabilities.candidate_resources) | {"ac1": (second.identity,)}
+    changed = req.model_copy(update={"capabilities": req.capabilities.model_copy(update={"candidate_resources": bindings})})
+    a = run((inp,), (scenario((req,)),))
+    b = run((inp,), (scenario((changed,)),))
+    assert a.manifest != b.manifest
+    caps_a = a.manifest["scenarios"][0]["effective_capabilities"]
+    caps_b = b.manifest["scenarios"][0]["effective_capabilities"]
+    assert caps_a["receiver_id"] == "receiver" and caps_a["epoch"] == 0
+    assert caps_a["supported_candidates"] == CANDIDATE_IDS
+    assert caps_a["candidate_resources"]["ac1"] == (first.identity.model_dump(),)
+    assert caps_b["candidate_resources"]["ac1"] == (second.identity.model_dump(),)
+    assert a.report == b.report and a.records == b.records
+    for out in (a, b):
+        assert SECRET not in canonical_text(out.model_dump())
+        public = canonical_text(dict(report=out.report, records=out.records))
+        assert "candidate_resources" not in public
+        assert "1" * 64 not in public and "2" * 64 not in public
+
+
+def test_controlled_manifest_distinguishes_effective_dictionary_selection(tmp_path, synthetic_counter):
+    # Catches treating input dictionary provenance as the scenario's enabled/selected state.
+    dictionary = UserDictionary(user_id="user", version="manual-v1", aliases={"x": SECRET})
+    inp = fixture_input(tmp_path, dictionary=dictionary)
+    enabled = request(dictionary=dictionary)
+    disabled = enabled.model_copy(update={"dictionary": enabled.dictionary.model_copy(update={"enabled": False})})
+    a = run((inp,), (scenario((enabled,)),))
+    b = run((inp,), (scenario((disabled,)),))
+    assert a.manifest != b.manifest
+    sel_a = a.manifest["scenarios"][0]["dictionary_selection"]
+    sel_b = b.manifest["scenarios"][0]["dictionary_selection"]
+    assert sel_a["enabled"] is True and sel_b["enabled"] is False
+    assert sel_a["content_hash"] == enabled.dictionary.content_hash
+    assert sel_a["dictionary_identity"] == {"user_id": "user", "version": "manual-v1"}
+    assert sel_b["dictionary_identity"] == sel_a["dictionary_identity"]
+    assert a.report == b.report and a.records == b.records
+    for out in (a, b):
+        assert SECRET not in canonical_text(out.model_dump())
+        assert canonical_text(dictionary.model_dump()) not in canonical_text(out.manifest)
+        public = canonical_text(dict(report=out.report, records=out.records))
+        assert enabled.dictionary.content_hash not in public
+        assert "dictionary_selection" not in public and "manual-v1" not in public
+
+
+@pytest.fixture
+def synthetic_matrix_harness(tmp_path, synthetic_counter, monkeypatch):
+    # Only benchmark result generation and expensive selection are replaced; the real
+    # harness still builds bounded scenarios and must enforce its terminal gate.
+    import sys
+    from types import SimpleNamespace
+    import agentcodec.benchmark as legacy
+    seed = run((fixture_input(tmp_path),), (scenario((request(),)),))
+    bench = tmp_path / "bench"
+    (bench / "dictionaries").mkdir(parents=True)
+    (tmp_path / ".superpowers/sdd/2026-10-20-agentcodec-adaptive-routing").mkdir(parents=True)
+    messages = [MessageV1(**(MESSAGE | {"message_id": str(i), "task": SECRET})) for i in range(30)]
+    data = "".join(canonical_text(m.model_dump()) + "\n" for m in messages)
+    for filename in ("tasks.v1.jsonl", "tasks-repetitive.v1.jsonl"):
+        (bench / filename).write_text(data)
+    dictionary = UserDictionary(user_id="user", version="manual-v1", aliases={"x": SECRET})
+    (bench / "dictionaries/repeat-v1.json").write_text(canonical_text(dictionary.model_dump()))
+    monkeypatch.setattr(legacy, "DEMO_DICTIONARY", dictionary)
+    controls = dict(fail_clean=False, wrong_positions=False)
+
+    def benchmark_result(config):
+        # Complete real artifact shape, with a deliberate boundary fault when requested.
+        out = seed.model_copy(deep=True)
+        out.manifest["code_revision"] = config.code_revision
+        scene = config.scenarios[0]
+        clean = scene.scenario_id.startswith("clean-") and scene.whole_corpus_repeats > 0
+        out.report["acceptance_passed"] = clean and not controls["fail_clean"]
+        out.report["clean_scenario_count"] = int(clean)
+        group = out.report["scenarios"]["0"]
+        group["whole_corpus_repeats"] = scene.whole_corpus_repeats
+        group["logical_case_count"] = 0 if controls["wrong_positions"] else len(scene.cases) * scene.whole_corpus_repeats
+        return out
+
+    monkeypatch.setattr(api(), "run_adaptive_benchmark", benchmark_result)
+    monkeypatch.setattr(sys.modules[__name__], "select_encoding", lambda req: SimpleNamespace(selected_candidate="json"))
+    return tmp_path, controls
+
+
+def test_local_matrix_harness_rejects_failed_clean_acceptance(synthetic_matrix_harness, capsys):
+    # Catches a false clean result returning normally or publishing a success summary.
+    root, controls = synthetic_matrix_harness
+    controls["fail_clean"] = True
+    with pytest.raises(RuntimeError, match="^approved local matrix validation failed; no fixture details disclosed$"):
+        run_approved_local_matrix(root, "synthetic-fix-revision")
+    assert not list((root / ".superpowers").rglob("summary.json"))
+    assert '"all_clean_acceptance_passed":true' not in capsys.readouterr().out
+
+
+def test_local_matrix_harness_rejects_wrong_expected_position_count(synthetic_matrix_harness):
+    # Catches a deterministic, nominally passing matrix with an incomplete denominator.
+    root, controls = synthetic_matrix_harness
+    controls["wrong_positions"] = True
+    with pytest.raises(RuntimeError, match="^approved local matrix validation failed; no fixture details disclosed$"):
+        run_approved_local_matrix(root, "synthetic-fix-revision")
+    assert not list((root / ".superpowers").rglob("summary.json"))
+
+
+def test_local_matrix_harness_rejects_missing_effective_tokenizer(synthetic_matrix_harness, monkeypatch):
+    # Catches checking loop labels instead of the actual effective profile dimension.
+    import sys
+    root, _ = synthetic_matrix_harness
+    cl100k = profile("cl100k_base")
+    monkeypatch.setattr(sys.modules[__name__], "profile", lambda name: cl100k)
+    with pytest.raises(RuntimeError, match="^approved local matrix validation failed; no fixture details disclosed$"):
+        run_approved_local_matrix(root, "synthetic-fix-revision")
+
+
+def test_local_matrix_harness_keeps_diagnostics_outside_clean_gate(synthetic_matrix_harness):
+    # Positive control: expected false fixed/negative/ablation results are not clean failures.
+    root, _ = synthetic_matrix_harness
+    previous = root / ".superpowers/sdd/2026-10-20-agentcodec-adaptive-routing/task-8-matrix/summary.json"
+    previous.parent.mkdir()
+    previous.write_text("previous local validation evidence")
+    result = run_approved_local_matrix(root, "synthetic-fix-revision")
+    assert previous.read_text() == "previous local validation evidence"
+    assert result["code_revision"] == "synthetic-fix-revision"
+    assert result["groups"] == 120 and result["clean_groups"] == 64
+    assert result["logical_positions"] == 17280
+    assert result["all_clean_acceptance_passed"] is True
+    assert all(not row["acceptance_passed"] for row in result["groups_separate"] if row["role"] != "clean")
+    # Check real gate behavior, not copies of the expected-signature builder.
+    rows = result["groups_separate"]
+    for incomplete in ([], rows[:-1], rows + [rows[0]]):
+        with pytest.raises(RuntimeError):
+            _require_matrix_success(incomplete)
+    mutations = (
+        ("corpus_id", "missing", lambda r: True),
+        ("tokenizer", "missing", lambda r: True),
+        ("domain", "transport", lambda r: r["domain"] == "source"),
+        ("allowlist", "all", lambda r: r["allowlist"] == "conservative"),
+        ("state", "ready", lambda r: r["state"] == "cold"),
+        ("sdk_repeat_count", 1, lambda r: r["sdk_repeat_count"] == 2),
+        ("fixed_candidate", "json", lambda r: r["fixed_candidate"] == "ac1"),
+        ("fault", "continue", lambda r: r["fault"] == "stop"),
+        ("min_savings_tokens", 0, lambda r: r["role"] == "policy"),
+        ("logical_case_count", 0, lambda r: r["whole_corpus_repeats"] > 0),
+        ("acceptance_passed", False, lambda r: r["role"] == "clean" and r["whole_corpus_repeats"] > 0),
+    )
+    for field, value, matches in mutations:
+        corrupted = [dict(r) for r in rows]
+        next(r for r in corrupted if matches(r))[field] = value
+        with pytest.raises(RuntimeError):
+            _require_matrix_success(corrupted)
 
 
 if __name__ == "__main__":
