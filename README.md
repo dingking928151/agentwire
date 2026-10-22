@@ -22,7 +22,7 @@ The wheelhouse path is a placeholder for your own local directory. Dependency pr
 
 ### Tokenizer prerequisites
 
-Only `benchmark` and `benchmark-suite` need tokenizer data. Both `o200k_base` and `cl100k_base` vocabulary files must already exist in the local tiktoken cache. Set `TIKTOKEN_CACHE_DIR` to the provisioned directory (otherwise `DATA_GYM_CACHE_DIR`, then the system temporary directory's `data-gym-cache`, is used). Cache names and required SHA-256 hashes are:
+`benchmark`, `benchmark-suite`, and exact comparisons in the opt-in adaptive commands need tokenizer data; `evaluate-offline` does not initialize a tokenizer. Both legacy token benchmarks require `o200k_base` and `cl100k_base` locally; an adaptive request requires its explicitly selected supported encoding. Vocabulary files must already exist in the local tiktoken cache. Set `TIKTOKEN_CACHE_DIR` to the provisioned directory (otherwise `DATA_GYM_CACHE_DIR`, then the system temporary directory's `data-gym-cache`, is used). Cache names and required SHA-256 hashes are:
 
 | Encoding | Cache filename | SHA-256 |
 | --- | --- | --- |
@@ -354,4 +354,155 @@ Full regression tests still require the already-provisioned tokenizer caches use
 
 ## Limits
 
-This MVP has no encryption, authentication, authorization, automatic dictionary updates, semantic compression, real-user corpus, model evaluation, action execution, online integration, network service, or deployment. Namespace checks are local metadata checks only. Inputs are read into memory without resource quotas; run untrusted large inputs with external resource limits. Protect message/dictionary/report files and stderr because they may contain private data. AC1 remains the default; AC2 is opt-in and experimental. Both carry only canonical `MessageV1` fields. See the [original design](docs/superpowers/specs/2026-10-19-agentcodec-design.md) and [approved AC2 experiment design](docs/superpowers/specs/2026-10-19-agentcodec-ac2-experiment-design.md) for the full boundary.
+This MVP has no encryption, authentication, authorization, automatic dictionary updates, semantic compression, real-user corpus, model evaluation, action execution, online integration, network service, or deployment. Namespace checks are local metadata checks only. Legacy inputs are read into memory without resource quotas; the new adaptive size/event bounds below are not CPU/memory quotas. Run untrusted large inputs with external resource limits. Protect message/dictionary/report files and stderr because they may contain private data. AC1 remains the default; AC2 is opt-in and experimental. Both carry only canonical `MessageV1` fields. See the [original design](docs/superpowers/specs/2026-10-19-agentcodec-design.md) and [approved AC2 experiment design](docs/superpowers/specs/2026-10-19-agentcodec-ac2-experiment-design.md) for the full boundary.
+
+## Opt-in adaptive selection (local only)
+
+`select-encoding` makes a **per-message** recommendation, not a send. `benchmark-adaptive` independently replays explicitly configured offline scenarios. Both are opt-in: legacy encode still defaults to AC1; the original five-condition benchmark, seven-condition `suite-v1`, and `offline-eval-v1` keep their old schemas and defaults. AC1's negative result above is unchanged. There is **no global optimality** claim across different messages, future workloads, or a whole corpus.
+
+The SDK entry point is `agentcodec.adaptive.select_encoding(SelectionRequest(...))`. It returns one decision/payload, never executes message text or confirms resources. The new production path is **record-only**, **zero retries**, zero sends and no automatic fallback. `fallback_required` means the caller must handle a rejection through a separately authorized workflow; it is not a recovery action. Offline recovery, if explicitly configured, is simulation only, with at most initial + same-payload retry + source-JSON fallback. It cannot change later fixed choices.
+
+### Complete synthetic request and benchmark config
+
+Use the existing `.venv` from the repository root, with the locally provisioned `cl100k_base` cache described above. Nothing below installs, downloads, contacts a service, reads credentials, or uses the repository corpora/dictionaries. The scripts write a complete strict JSON request/config, not a configuration template with missing keys. Installed tiktoken version, synthetic source hash, and local Git revision are measured explicitly. Keep the generated directory private: only the summary/report/records are redacted, not the request, source or explicit payload.
+
+```sh
+export ADAPTIVE_DEMO=$(mktemp -d /tmp/agentcodec-adaptive-demo-XXXXXX)
+.venv/bin/python - <<'PY'
+import json
+import os
+from importlib.metadata import version
+from pathlib import Path
+p = Path(os.environ['ADAPTIVE_DEMO'])
+message = {
+    'message_id': 'adaptive-demo', 'message_type': 'delegate',
+    'task': 'Review the local report. Do not publish.', 'status': 'pending',
+    'blocker': None, 'next_step': '', 'evidence': [],
+    'constraints': ['Budget <= $25.'], 'approval_required': False,
+    'user_id': 'synthetic-user', 'dictionary_version': None,
+}
+request = {
+    'contract_version': 'adaptive-selection-v1', 'message': message,
+    'expected_user_id': 'synthetic-user', 'original_format': 'ac1',
+    'allowlist': ['json', 'ac1'],
+    'tokenizer': {
+        'encoding_name': 'cl100k_base', 'library_version': version('tiktoken'),
+        'vocabulary_sha256': '223921b76ee99bde995b7ff738513eef100fb51d18c93597a113bcffe865b2a7',
+        'renderer_version': 'adaptive-text-v1', 'accuracy': 'exact_local_text',
+        'mapping_basis': 'Explicit local ordinary-text encoding, not a model mapping',
+    },
+    'capabilities': {
+        'receiver_id': 'local-deterministic', 'supported_candidates': ['json', 'ac1'],
+        'candidate_resources': {}, 'epoch': 0,
+    },
+    'snapshot': {
+        'scope_id': 'synthetic-scope', 'receiver_id': 'local-deterministic',
+        'user_id': 'synthetic-user', 'epoch': 0, 'history_complete': True,
+        'historical_events': [], 'resources': [],
+    },
+    'dictionary': {'enabled': False, 'dictionary': None, 'content_hash': None},
+    'policy': {
+        'repeat_count': 1, 'repeat_declaration': None,
+        'min_savings_tokens': 0, 'min_savings_ratio': 0.0,
+        'fallback_mode': 'record_only', 'max_retries': 0,
+        'assumption': 'deterministic_clean',
+    },
+    'envelope': {'prefix': '', 'suffix': '', 'final_lf': False},
+}
+p.joinpath('request.json').write_text(json.dumps(request, ensure_ascii=False) + '\n', encoding='utf-8')
+p.joinpath('source.jsonl').write_text(json.dumps(message, ensure_ascii=False) + '\n', encoding='utf-8')
+PY
+REQUEST="$ADAPTIVE_DEMO/request.json"
+SUMMARY="$ADAPTIVE_DEMO/summary.json"
+PAYLOAD="$ADAPTIVE_DEMO/payload.txt"
+.venv/bin/python -m agentcodec.cli select-encoding \
+  --request "$REQUEST" --summary-output "$SUMMARY" --payload-output "$PAYLOAD"
+
+# Freeze one complete clean scenario BEFORE either benchmark replay.
+.venv/bin/python - <<'PY'
+import hashlib
+import json
+import os
+import subprocess
+from pathlib import Path
+p = Path(os.environ['ADAPTIVE_DEMO'])
+r = json.loads(p.joinpath('request.json').read_text(encoding='utf-8'))
+s = json.loads(p.joinpath('summary.json').read_text(encoding='utf-8'))
+assert s['status'] == 'selected' and s['comparison_status'] == 'exact_local_text'
+config = {
+    'code_revision': subprocess.run(['git', 'rev-parse', 'HEAD'], check=True,
+        capture_output=True, text=True).stdout.strip(),
+    'input_manifest': [{
+        'corpus_id': 'synthetic', 'source_path': 'source.jsonl',
+        'source_sha256': hashlib.sha256(p.joinpath('source.jsonl').read_bytes()).hexdigest(),
+        'source_count': 1, 'dictionary_path': None, 'dictionary_sha256': None,
+        'dictionary_source': 'none',
+    }],
+    'scenario_corpora': {'clean-synthetic': 'synthetic'},
+    'scenarios': [{
+        'scenario_id': 'clean-synthetic',
+        'cases': [{'source_message': r['message'], 'request': r, 'metadata_authorized': False}],
+        'whole_corpus_repeats': 1, 'fixed_decisions': [s['selected_candidate']],
+        'resource_schedule': [
+            {'case_index': 0, 'repeat_index': 0, 'stage': 'setup', 'snapshot': r['snapshot']},
+            {'case_index': 0, 'repeat_index': 0, 'stage': 'initial', 'snapshot': r['snapshot']},
+        ],
+        'paths': [{
+            'path_id': 'deterministic-clean', 'probability_numerator': 1,
+            'probability_denominator': 1,
+            'outcomes': [{'case_index': 0, 'repeat_index': 0, 'stage': 'initial',
+                'success': True, 'response_text': ''}],
+        }],
+        'remainder_policy': 'continue_declared',
+    }],
+}
+p.joinpath('config.json').write_text(json.dumps(config, ensure_ascii=False) + '\n', encoding='utf-8')
+PY
+CONFIG="$ADAPTIVE_DEMO/config.json"
+OUT_A=$(mktemp -d "$ADAPTIVE_DEMO/run-a-XXXXXX")
+OUT_B=$(mktemp -d "$ADAPTIVE_DEMO/run-b-XXXXXX")
+for OUT in "$OUT_A" "$OUT_B"; do
+  .venv/bin/python -m agentcodec.cli benchmark-adaptive \
+    --config "$CONFIG" --output-dir "$OUT" || exit 1
+done
+for FILE in manifest.json records.jsonl report.json; do
+  cmp "$OUT_A/$FILE" "$OUT_B/$FILE" || exit 1
+done
+export OUT_A
+.venv/bin/python - <<'PY'
+import json
+import os
+from pathlib import Path
+p = Path(os.environ['OUT_A'])
+m = json.loads(p.joinpath('manifest.json').read_text(encoding='utf-8'))
+r = json.loads(p.joinpath('report.json').read_text(encoding='utf-8'))
+assert m['version'] == 'adaptive-benchmark-manifest-v1'
+assert r['version'] == 'adaptive-benchmark-v1'
+assert r['acceptance_passed'] is True
+assert len(r['scenarios']) == 1
+for row in r['scenarios'].values():
+    assert row['logical_case_count'] == row['full_equal_count'] == row['hard_equal_count'] == 1
+    assert row['eligibility_violation_count'] == row['predicted_regret'] == 0
+print('Synthetic clean acceptance and byte reproducibility passed.')
+PY
+```
+
+This example explicitly declares a local deterministic receiver with no text resource dependencies, an empty complete history, no dictionary, one instance, no response text, and no transport envelope/LF. Installing the SDK does **not** prove a remote receiver has builtin decoders. Real setup/context dependencies must be listed in `candidate_resources` and immutable `resources`; each identity binds scope/receiver/user/kind/version/content hash/profile, with explicit state, exposure, epoch, validity and readiness basis. `cold` proposals never become `ready` automatically. Confirmation is caller-owned and epoch-checked. **ready is not free**: `per_request_context` is charged every request, and independent setup/ack text is charged separately when declared. Shared dependencies are charged as a union, not once per candidate.
+
+### Counts, selection, and failure semantics
+
+`repeat_count` is the **total uses of the same complete eleven-field instance**, default 1; N > 1 requires `repeat_declaration` with `unit='same_message_instance'`, matching total count and the canonical full-instance SHA-256. Different variable values are different instances. The optional `--expected-future-reuses 0|1` means total 1|2 and is allowed only when both count/declaration fields are absent from the request policy; it cannot accompany the complete policy above unchanged. `whole_corpus_repeats` is instead an offline whole-group unit (0 is dry-run only); SDK 0 is rejected. Neither declaration executes any repetitions.
+
+Defaults allow `json/ac1` only. AC2 and dictionary candidate IDs require separate explicit allowlist/capability opt-ins. A dictionary additionally needs explicit enablement, full same-user dictionary/version and canonical content hash. The router never edits `dictionary_version`: null source and caller-authorized non-null transport are separate comparison domains with separate denominators. Invalid owner/version/hash/configuration is rejected before missing-tokenizer handling, even if the original is JSON.
+
+Selection compares complete setup/context/payload/envelope/metadata text using the explicit **local ordinary-text** profile. Components are signed prefix increments of a complete request, not independently tokenized fields added together. `remaining_expected_tokens` is the current objective; `scope_spent_tokens` is historical sunk cost; lifecycle is their sum, or null when history is incomplete. Retry/fallback are zero in production. CPU, undeclared responses/output direction and provider framing are excluded, not silently claimed as a full API lifecycle.
+
+Default thresholds are 0/0. Strictly lower complete cost wins; ties prefer eligible original format, no new resources, then json/ac1/ac2/ac1_dictionary/ac2_dictionary. Explicit threshold policies switch only when savings strictly exceed the configured maximum threshold; `policy_retained`, minimum and opportunity cost disclose non-minimal retention. Break-even is a strict integer comparison, not a promise that more reuse always helps; validity must cover all N and nonstationary schedules cannot use a permanent linear threshold.
+
+Unknown/missing/corrupt tokenizer, unreliable profile or required unknown cost yields `cannot_compare` (surrogate profiles are explicitly approximate), **null** unknown costs/savings, and only a strictly legal original payload may be preserved. There is no character/byte estimate or download fallback. `selected` versus `preserved_without_comparison` are different outcomes, though both exit **0**. Configuration/integrity rejection has `fallback_required`, null payload and exit **1**; fixed I/O errors also exit 1; usage errors exit **2**. No provider/model/retry/credentials options exist.
+
+Without `--summary-output`, stdout contains only the redacted decision; payload requires an explicit new local file and is never printed implicitly. Payload files append a document LF; that LF is not a transport token unless `envelope.final_lf` says so. Relative file paths resolve against the request/config directory. Existing outputs, input collisions, leaf symlinks and special input files are rejected by the new input/output checks; ancestor paths are resolved, not comprehensively secured against concurrent changes; use trusted regular files and new files or empty output directories. Publication stages outputs and attempts scoped cleanup on failure, not a cross-file power-loss transaction or a full concurrent-filesystem guarantee. Legacy CLI file rules are unchanged; these new checks are not retrofitted to it.
+
+A benchmark exit 0 means all three artifacts were written, **not** clean acceptance: inspect `acceptance_passed`. Report/records use local ordinal IDs and no original messages, terms, payloads, free-text identities or content hashes; only the controlled local manifest retains necessary identities/hashes. Versions are `adaptive-benchmark-manifest-v1`, `adaptive-benchmark-record-v1`, and `adaptive-benchmark-v1`. A `clean-` scenario enters the clean gate only with non-dry, exact, legal, equal-field, zero-regret results; `negative-`, `fixed-`, `policy-` and `ablation-` cases are diagnostics, not clean success. Corpus/profile/domain/allowlist/resource/fault denominators remain separate. Same input/config/revision/profile produces deterministic bytes; even documentation commits change revision, so compare fresh runs at the **same** revision.
+
+These estimates are **not model understanding**, business success, provider performance, latency, or safety reasoning, and **not provider billing** or a general savings guarantee. Historical synthetic results remain corpus-specific, including AC1's negative cases. A content hash is not anonymization. Any real API/provider/model phase requires new permission. See [SECURITY.md](SECURITY.md) for the limits of local file and resource checks.
