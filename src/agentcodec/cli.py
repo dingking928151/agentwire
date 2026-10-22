@@ -282,5 +282,31 @@ def evaluate_offline(
         _offline_write(output_dir, artifacts)
 
 
+# Separate opt-in commands: no legacy command, renderer or default is changed.
+from .adaptive.cli import AdaptiveCommand
+
+
+@app.command("select-encoding", cls=AdaptiveCommand)
+def select_encoding_cli(
+    request: Annotated[Path, typer.Option("--request")],
+    summary_output: Annotated[Path | None, typer.Option("--summary-output")] = None,
+    payload_output: Annotated[Path | None, typer.Option("--payload-output")] = None,
+    expected_future_reuses: Annotated[str | None, typer.Option("--expected-future-reuses")] = None,
+):
+    """Select one encoding locally; summaries are redacted, payload files opt-in."""
+    from .adaptive.cli import parse_future_reuses, select_encoding_command
+    select_encoding_command(request, summary_output, payload_output, parse_future_reuses(expected_future_reuses))
+
+
+@app.command("benchmark-adaptive", cls=AdaptiveCommand)
+def benchmark_adaptive_cli(
+    config: Annotated[Path, typer.Option("--config")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+):
+    """Write independent local diagnostics, not model or provider evidence."""
+    from .adaptive.cli import benchmark_adaptive_command
+    benchmark_adaptive_command(config, output_dir)
+
+
 if __name__ == "__main__":
     app()
