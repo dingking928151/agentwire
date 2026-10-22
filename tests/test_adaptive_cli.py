@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import socket
 import subprocess
+import sys
 
 import pytest
 from typer.testing import CliRunner
@@ -258,6 +259,67 @@ def test_permission_and_missing_input_errors_are_fixed(tmp_path, monkeypatch):
         assert result.exit_code in (1, 2)
         assert_private(result, str(path))
     assert "adaptive_io_error" in select(path).stderr
+
+
+def run_cli_process(*args):
+    # A real CLI process exposes tracebacks that CliRunner would capture as exceptions.
+    # Popen is local only; the run() guard still permits only the revision command.
+    command = [sys.executable, "-m", "agentcodec.cli", *map(str, args)]
+    with subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, env=os.environ | {"PYTHONDONTWRITEBYTECODE": "1"}) as process:
+        stdout, stderr = process.communicate(timeout=30)
+        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+@pytest.mark.parametrize("target", ["request", "summary", "payload"])
+def test_select_symlink_loop_is_redacted_and_publishes_nothing(tmp_path, target):
+    # Catches ancestor resolve() failures escaping request and explicit-output validation.
+    marker = "synthetic-select-loop-marker"
+    loop = tmp_path / marker
+    loop.symlink_to(loop.name, target_is_directory=True)
+    path = save(tmp_path / "request.json", request_data())
+    request = loop / "request.json" if target == "request" else path
+    summary = Path(marker) / "summary.json" if target == "summary" else tmp_path / "summary.json"
+    payload = Path(marker) / "payload.ac1" if target == "payload" else tmp_path / "payload.ac1"
+    before = set(tmp_path.rglob("*"))
+    result = run_cli_process("select-encoding", "--request", request,
+        "--summary-output", summary, "--payload-output", payload)
+    public = result.stdout + result.stderr
+    assert ("Traceback" in public, marker in public) == (False, False)
+    assert result.returncode == 1
+    assert result.stderr == "adaptive_invalid_input\n"
+    failure = json.loads(result.stdout)
+    assert failure["status"] == "fallback_required"
+    assert failure["comparison_status"] == "cannot_compare"
+    assert failure["reason_codes"] == ["adaptive_invalid_input"]
+    assert SECRET not in public
+    assert set(tmp_path.rglob("*")) == before
+
+
+@pytest.mark.parametrize("target", ["config", "output", "source", "dictionary"])
+def test_benchmark_symlink_loop_is_redacted_and_publishes_nothing(tmp_path, target):
+    # Catches the same failure in config/output and nested manifest path resolution.
+    marker = "synthetic-benchmark-loop-marker"
+    loop = tmp_path / marker
+    loop.symlink_to(loop.name, target_is_directory=True)
+    data = benchmark_data(tmp_path)
+    if target == "source":
+        data["input_manifest"][0]["source_path"] = str(Path(marker) / "source.jsonl")
+    elif target == "dictionary":
+        data["input_manifest"][0].update(dictionary_source="local_file",
+            dictionary_path=str(Path(marker) / "dictionary.json"), dictionary_sha256="0" * 64)
+    path = save(tmp_path / "config.json", data)
+    config = loop / "config.json" if target == "config" else path
+    out = Path(marker) / "out" if target == "output" else tmp_path / "out"
+    before = set(tmp_path.rglob("*"))
+    result = run_cli_process("benchmark-adaptive", "--config", config, "--output-dir", out)
+    public = result.stdout + result.stderr
+    assert ("Traceback" in public, marker in public) == (False, False)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr == "adaptive_invalid_input\n"
+    assert SECRET not in public
+    assert set(tmp_path.rglob("*")) == before
 
 
 def test_fallback_required_never_writes_payload(tmp_path, synthetic_counter):

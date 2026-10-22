@@ -159,7 +159,10 @@ def _local(path, base=None):
     # Inspect the actual leaf before resolving: even a dangling link is occupied.
     if result.is_symlink():
         raise _InvalidInput()
-    return result.resolve()
+    try:
+        return result.resolve()
+    except RuntimeError:  # Python 3.12 and earlier report symlink loops this way.
+        raise _InvalidInput() from None
 
 
 def _outputs(paths, protected):
