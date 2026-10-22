@@ -126,7 +126,7 @@
 - [x] 文档验收先 RED，补 README/SECURITY 再 GREEN；保留旧 AC1 负结果和全部旧报告/default/SDK 兼容。
 - [x] 完整测试、合成 CLI 示例、真实本地矩阵和同 revision 复现完成；不得安装/联网补齐环境，不以 skip/stub 冒充完成。
 - [x] 对应文件和已批准设计/计划/checklist 按计划分开显式本地提交，不 git add .。
-- [ ] 新独立审查者检查整个基线到最终 HEAD 的分支；五项 Review Focus 及设计全条款覆盖，Critical/Important 问题全部修复并复验。
+- [x] 新独立审查者检查整个基线到最终 HEAD 的分支；复核五项 Review Focus 及设计全条款。唯一 Important（祖先 symlink loop 导致 CLI traceback 泄露调用路径）已 TDD 修复并 scoped re-review 通过；剩余 4 项 Minor 均为非阻塞建议，留档。
 - [x] 最终核对原 agentcodec-mvp ref 未改、当前仍 agentcodec-auto-select；保持本地未合并，无 push/发布/部署/API/凭据/原始语料外发。
 
-Task 10 实现证据：5 focused / 1,648 full passed；真实本地 120 组中 64 个非 dry clean 组通过、15,840 clean 位置全等及 regret 0；同 revision 产物复现。最终独立全分支审查未执行，其复选框保持开放；Task 9 import-boundary Minor 与未证实的条件性 symlink-loop RuntimeError 观察留给最终 reviewer，未自行关闭。诊断偏差：首轮测试解析错误的 traceback 曾回显局部本地合成 fixture；原详细日志已改为脱敏摘要，后续仅展示固定诊断/计数，完整情况见 task-10-report.md；未改动或外发原始语料文件。
+Task 10 实现证据：5 focused / 1,648 full passed；随后 final-review Important fix 后 1,655 full passed。真实本地矩阵 120 组中 64 个非 dry clean 组通过、15,840 clean 位置全等及 regret 0；同 revision 产物复现。最终全分支独立审查发现并要求修复 symlink-loop path leak，fix commit `7538e2b` 经 7 项 RED→GREEN 回归和 scoped re-review 通过。Final reviewer 留下 4 项非阻塞 Minor。诊断偏差：首轮测试解析错误的 traceback 曾回显局部本地合成 fixture；原详细日志已改为脱敏摘要，后续仅展示固定诊断/计数，完整情况见 `task-10-report.md`；未改动或外发原始语料文件。当前 branch 保持未合并/未推送。
