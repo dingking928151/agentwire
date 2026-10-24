@@ -1,0 +1,361 @@
+"""Synthetic-only behavioral tests for strict AgentWire Compact Profile v1."""
+
+import importlib
+import json
+
+import pytest
+
+from agentcodec.agentwire import AgentWireError, ReceiverCapabilities
+from agentcodec.schema import MessageV1, UserDictionary
+
+
+@pytest.fixture
+def codec():
+    try:
+        return importlib.import_module("agentcodec.agentwire.codec")
+    except ModuleNotFoundError as error:
+        if error.name in {"agentcodec.agentwire.codec"}:
+            class MissingCodec:
+                def __getattr__(self, name):
+                    pytest.fail(f"AWP1 codec API is not implemented: {name}", pytrace=False)
+
+            return MissingCodec()
+        raise
+
+
+def capabilities(**changes):
+    values = dict(
+        user_id="team-a",
+        supported_profile_versions=("AWP1",),
+        supported_schema_versions=("MessageV1",),
+        supported_enum_table_versions=("AWP1",),
+        max_message_bytes=4096,
+        dictionary_identity=None,
+    )
+    return ReceiverCapabilities(**(values | changes))
+
+
+def base_values():
+    return [
+        "msg-7",
+        "D",
+        "Review | packet, safely.\n雪",
+        "P",
+        None,
+        "Continue  ",
+        ["evidence", "evidence", "括号()，｜"],
+        ["No publish. "],
+        False,
+        "team-a",
+        None,
+    ]
+
+
+def dictionary_values():
+    return [
+        "msg-7", "D", "Review exact task", "P", None, "Continue  ",
+        ["Evidence exact", "Evidence exact"], ["Do not publish."], False,
+        "team-a", "dict-v1",
+    ]
+
+
+def raw_wire(identity=None, values=None):
+    return "AWP1|" + json.dumps(
+        [identity, base_values() if values is None else values],
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+def phrase_dictionary():
+    return UserDictionary(
+        user_id="team-a",
+        version="dict-v1",
+        aliases={
+            "t": "Review exact task",
+            "b": "Blocked by exact phrase",
+            "n": "Send the exact next step",
+            "e": "Evidence exact",
+            "c": "Do not publish.",
+        },
+    )
+
+
+def dictionary_message():
+    return MessageV1(
+        message_id="Review exact task",
+        message_type="delegate",
+        task="Review exact task",
+        status="pending",
+        blocker="Blocked by exact phrase",
+        next_step="Send the exact next step",
+        evidence=["Evidence exact", "Evidence exact", "Evidence exact trailing"],
+        constraints=["Do not publish.", "Do not publish. trailing"],
+        approval_required=False,
+        user_id="team-a",
+        dictionary_version="dict-v1",
+    )
+
+
+def test_awp1_golden_round_trip_preserves_all_eleven_fields(codec):
+    message = MessageV1(
+        message_id="msg-7",
+        message_type="delegate",
+        task="Review | packet, safely.\n雪",
+        status="pending",
+        blocker=None,
+        next_step="Continue  ",
+        evidence=["evidence", "evidence", "括号()，｜"],
+        constraints=["No publish. "],
+        approval_required=False,
+        user_id="team-a",
+        dictionary_version=None,
+    )
+    golden = 'AWP1|[null,["msg-7","D","Review | packet, safely.\\n雪","P",null,"Continue  ",["evidence","evidence","括号()，｜"],["No publish. "],false,"team-a",null]]'
+
+    assert codec.encode_awp1(message) == golden
+    decoded = codec.decode_awp1(golden, capabilities())
+    assert decoded.model_dump() == message.model_dump()
+    assert list(decoded.model_dump()) == [
+        "message_id", "message_type", "task", "status", "blocker", "next_step",
+        "evidence", "constraints", "approval_required", "user_id", "dictionary_version",
+    ]
+
+
+def test_dictionary_identity_and_whole_value_refs_round_trip(codec):
+    dictionary = phrase_dictionary()
+    message = dictionary_message()
+    original_message = message.model_dump()
+    original_dictionary = dictionary.model_dump()
+    golden = 'AWP1|[["team-a","dict-v1","f878606fc07796c0e673dc1cce847421b50cc62ad159fa5ca865688e7322b7fd"],["Review exact task","D",{"$ref":"t"},"P",{"$ref":"b"},{"$ref":"n"},[{"$ref":"e"},{"$ref":"e"},"Evidence exact trailing"],[{"$ref":"c"},"Do not publish. trailing"],false,"team-a","dict-v1"]]'
+
+    assert codec.encode_awp1(message, dictionary=dictionary) == golden
+    decoded = codec.decode_awp1(
+        golden,
+        capabilities(dictionary_identity=codec.dictionary_identity_for(dictionary)),
+        dictionary=dictionary,
+    )
+    assert decoded.model_dump() == original_message
+    assert message.model_dump() == original_message
+    assert dictionary.model_dump() == original_dictionary
+    negotiated = codec.negotiate_awp1(
+        capabilities(dictionary_identity=codec.dictionary_identity_for(dictionary)),
+        golden,
+        dictionary=dictionary,
+    )
+    assert negotiated.status == "supported"
+    assert negotiated.reason_code is None
+
+
+def test_decoder_enforces_actual_utf8_byte_limit_before_json_parse(codec):
+    # Ten Unicode characters but twelve UTF-8 bytes; malformed JSON must lose to the byte limit.
+    payload = 'AWP1|["雪",'
+    assert len(payload) == 10
+    assert len(payload.encode("utf-8")) == 12
+    receiver = capabilities(max_message_bytes=10)
+
+    with pytest.raises(AgentWireError) as exc_info:
+        codec.decode_awp1(payload, receiver)
+    assert exc_info.value.reason_code == "message_too_large"
+    assert str(exc_info.value) == "agentwire operation rejected"
+
+
+def test_deeply_nested_json_fails_with_a_stable_redacted_error(codec):
+    payload = "AWP1|" + "[" * 1200 + "]" * 1200
+
+    with pytest.raises(AgentWireError) as exc_info:
+        codec.decode_awp1(payload, capabilities(max_message_bytes=4096))
+
+    assert exc_info.value.reason_code == "invalid_envelope"
+    assert str(exc_info.value) == "agentwire operation rejected"
+    assert payload not in str(exc_info.value)
+
+
+def test_bad_envelope_or_any_bad_field_fails_closed(codec):
+    dictionary = phrase_dictionary()
+    identity = [
+        "team-a", "dict-v1",
+        "f878606fc07796c0e673dc1cce847421b50cc62ad159fa5ca865688e7322b7fd",
+    ]
+    bad_duplicate = 'AWP1|[null,["msg-7","D",{"x":1,"x":2},"P",null,"Continue  ",["evidence","evidence","括号()，｜"],["No publish. "],false,"team-a",null]]'
+    bad_nan = 'AWP1|[null,["msg-7","D",NaN,"P",null,"Continue  ",["evidence","evidence","括号()，｜"],["No publish. "],false,"team-a",null]]'
+    bad_surrogate = 'AWP1|[null,["msg-7","D","\\ud800","P",null,"Continue  ",["evidence","evidence","括号()，｜"],["No publish. "],false,"team-a",null]]'
+    malformed = [
+        ("NOT-AWP|[]", None, None, "invalid_envelope"),
+        ("AWP2|[]", None, None, "unsupported_profile"),
+        (bad_duplicate, None, None, "invalid_envelope"),
+        (bad_nan, None, None, "invalid_envelope"),
+        ("AWP1|{}", None, None, "invalid_envelope"),
+        ("AWP1|[null]", None, None, "invalid_envelope"),
+        ("AWP1|[null,[],null]", None, None, "invalid_envelope"),
+        (raw_wire(values=base_values()[:-1]), None, None, "invalid_envelope"),
+        (raw_wire(values=base_values() + ["extra"]), None, None, "invalid_envelope"),
+        (raw_wire(identity={"user_id": "team-a", "version": "dict-v1", "sha256": "a" * 64}), None, None, "invalid_envelope"),
+        (raw_wire(identity=["team-a", "dict-v1"]), None, None, "invalid_envelope"),
+        (raw_wire(identity=["team-a", "dict-v1", "A" * 64]), None, None, "invalid_envelope"),
+        (raw_wire(identity=["team-a", "dict-v1", "a" * 63]), None, None, "invalid_envelope"),
+        (raw_wire(identity=["team-a", "dict-v1", "g" * 64]), None, None, "invalid_envelope"),
+        (raw_wire(values=["msg-7", "P", *base_values()[2:]]), None, None, "unknown_enum"),
+        (raw_wire(values=["msg-7", "D", base_values()[2], "D", *base_values()[4:]]), None, None, "unknown_enum"),
+        (raw_wire(values=[7, *base_values()[1:]]), None, None, "invalid_message"),
+        (raw_wire(values=[*base_values()[:2], 7, *base_values()[3:]]), None, None, "invalid_message"),
+        (raw_wire(values=[*base_values()[:4], [], *base_values()[5:]]), None, None, "invalid_message"),
+        (raw_wire(values=[*base_values()[:8], 1, *base_values()[9:]]), None, None, "invalid_message"),
+        (bad_surrogate, None, None, "invalid_message"),
+        (raw_wire(identity=identity, values=[*base_values()[:2], {"$ref": "missing"}, *base_values()[3:]]), None, None, "dictionary_missing"),
+        (raw_wire(identity=identity, values=[*dictionary_values()[:2], {"$ref": "missing"}, *dictionary_values()[3:]]), dictionary, "selected", "unknown_alias"),
+        (raw_wire(identity=identity, values=[*dictionary_values()[:2], {"$ref": "t", "extra": "x"}, *dictionary_values()[3:]]), dictionary, "selected", "invalid_message"),
+        (raw_wire(identity=["other-team", "dict-v1", identity[2]], values=dictionary_values()), dictionary, "selected", "dictionary_identity_mismatch"),
+        (raw_wire(identity=identity, values=[*dictionary_values()[:9], "other-team", "dict-v1"]), dictionary, "selected", "dictionary_identity_mismatch"),
+        (raw_wire(identity=identity, values=[*dictionary_values()[:10], "other-version"]), dictionary, "selected", "dictionary_identity_mismatch"),
+        (raw_wire(identity=identity, values=dictionary_values()), dictionary, "receiver_conflict", "dictionary_identity_mismatch"),
+    ]
+
+    for payload, selected_dictionary, receiver_mode, reason in malformed:
+        receiver_identity = None
+        if receiver_mode == "selected":
+            receiver_identity = codec.dictionary_identity_for(dictionary)
+        elif receiver_mode == "receiver_conflict":
+            receiver_identity = codec.dictionary_identity_for(
+                UserDictionary(
+                    user_id="team-a",
+                    version="dict-v1",
+                    aliases={"different": "Different phrase"},
+                )
+            )
+        receiver = capabilities(dictionary_identity=receiver_identity)
+        if reason == "dictionary_missing":
+            receiver = capabilities()
+        with pytest.raises(AgentWireError) as exc_info:
+            codec.decode_awp1(payload, receiver, dictionary=selected_dictionary)
+        assert exc_info.value.reason_code == reason, payload
+        assert str(exc_info.value) == "agentwire operation rejected"
+        assert payload not in str(exc_info.value)
+
+
+def test_dictionary_version_mismatch_rejects_without_metadata_rewrite(codec):
+    dictionary = phrase_dictionary()
+    for version in (None, "other-version"):
+        message = dictionary_message().model_copy(update={"dictionary_version": version})
+        before = message.model_dump()
+        with pytest.raises(AgentWireError) as exc_info:
+            codec.encode_awp1(message, dictionary=dictionary)
+        assert exc_info.value.reason_code == "dictionary_identity_mismatch"
+        assert message.model_dump() == before
+
+
+def test_negotiation_reports_wire_or_receiver_mismatch_without_payload(codec):
+    valid = raw_wire()
+    checks = [
+        (capabilities(supported_profile_versions=("AWP9",)), valid, None, "unsupported_profile"),
+        (capabilities(supported_schema_versions=("MessageV9",)), valid, None, "unsupported_schema"),
+        (capabilities(supported_enum_table_versions=("AWP9",)), valid, None, "unsupported_enum_table"),
+        (capabilities(user_id="other-team"), valid, None, "receiver_user_mismatch"),
+        (capabilities(), raw_wire(identity=["team-a", "dict-v1", "f878606fc07796c0e673dc1cce847421b50cc62ad159fa5ca865688e7322b7fd"]), None, "dictionary_missing"),
+        (capabilities(dictionary_identity=None), raw_wire(), phrase_dictionary(), "dictionary_identity_mismatch"),
+        (capabilities(max_message_bytes=10), valid, None, "message_too_large"),
+        (capabilities(), "AWP1|[]", None, "invalid_envelope"),
+        (capabilities(), raw_wire(values=[*base_values()[:3], "bad", *base_values()[4:]]), None, "unknown_enum"),
+    ]
+
+    for receiver, payload, selected_dictionary, expected_reason in checks:
+        result = codec.negotiate_awp1(receiver, payload, dictionary=selected_dictionary)
+        assert result.status == "fallback_required"
+        assert result.reason_code == expected_reason
+        assert set(result.model_dump()) == {"status", "reason_code"}
+
+    supported = codec.negotiate_awp1(capabilities(), valid)
+    assert supported.status == "supported"
+    assert supported.reason_code is None
+
+    dictionary = phrase_dictionary()
+    selected_receiver = capabilities(
+        dictionary_identity=codec.dictionary_identity_for(dictionary)
+    )
+    bad_identity = raw_wire(
+        identity=["team-a", "dict-v1", "a" * 64],
+        values=dictionary_values(),
+    )
+    mismatch = codec.negotiate_awp1(
+        selected_receiver, bad_identity, dictionary=dictionary
+    )
+    assert mismatch.status == "fallback_required"
+    assert mismatch.reason_code == "dictionary_identity_mismatch"
+
+
+def test_negotiation_uses_wire_identity_and_actual_size_only(codec):
+    receiver = capabilities()
+    payload = raw_wire()
+
+    for forbidden_override in (
+        {"parsed_message": MessageV1(**{
+            "message_id": "msg-7", "message_type": "delegate", "task": "forged",
+            "status": "pending", "blocker": None, "next_step": "Continue  ",
+            "evidence": ["evidence", "evidence", "括号()，｜"], "constraints": ["No publish. "],
+            "approval_required": False, "user_id": "team-a", "dictionary_version": None,
+        })},
+        {"identity": ["team-a", "dict-v1", "a" * 64]},
+        {"byte_count": 0},
+    ):
+        with pytest.raises(TypeError):
+            codec.negotiate_awp1(receiver, payload, **forbidden_override)
+
+    oversized = raw_wire().replace("Review | packet, safely.", "雪" * 1500)
+    result = codec.negotiate_awp1(capabilities(max_message_bytes=4096), oversized)
+    assert result.status == "fallback_required"
+    assert result.reason_code == "message_too_large"
+
+
+def test_unselected_dictionary_version_is_preserved_without_alias_expansion(codec):
+    message = dictionary_message()
+    before = message.model_dump()
+
+    wire = codec.encode_awp1(message)
+
+    assert wire.startswith("AWP1|[null,")
+    assert '"Review exact task"' in wire
+    assert '{"$ref"' not in wire
+    decoded = codec.decode_awp1(wire, capabilities())
+    assert decoded.model_dump() == before
+    assert decoded.dictionary_version == "dict-v1"
+
+
+def test_round_trip_preserves_null_false_empty_values_order_and_text_verbatim(codec):
+    message = MessageV1(
+        message_id="id,|()\n雪",
+        message_type="result",
+        task="",
+        status="cancelled",
+        blocker="",
+        next_step=None,
+        evidence=["second", "first", "second", ""],
+        constraints=[],
+        approval_required=False,
+        user_id="team-a",
+        dictionary_version=None,
+    )
+    golden = 'AWP1|[null,["id,|()\\n雪","R","","X","",null,["second","first","second",""],[],false,"team-a",null]]'
+
+    assert codec.encode_awp1(message) == golden
+    assert codec.decode_awp1(golden, capabilities()).model_dump() == message.model_dump()
+
+
+def test_non_exact_reference_objects_and_null_identity_references_fail_closed(codec):
+    non_exact_objects = (
+        {"$ref": "t", "extra": "value"},
+        {"ref": "t"},
+        {"$ref": 7},
+        {"$ref": None},
+    )
+    for item in non_exact_objects:
+        values = base_values()
+        values[2] = item
+        with pytest.raises(AgentWireError):
+            codec.decode_awp1(raw_wire(values=values), capabilities())
+
+    null_identity_ref = base_values()
+    null_identity_ref[2] = {"$ref": "t"}
+    with pytest.raises(AgentWireError) as exc_info:
+        codec.decode_awp1(raw_wire(values=null_identity_ref), capabilities())
+    assert exc_info.value.reason_code == "unknown_alias"
