@@ -281,11 +281,30 @@ def test_direct_request_keeps_common_task_prompt_in_every_format(prompts):
     )
     for candidate_id in candidate_ids:
         selected = dictionary() if candidate_id.endswith("_dictionary") else None
+        payload = "SYNTHETIC_PAYLOAD"
+        if candidate_id == "awp1_dictionary":
+            from agentcodec.agentwire.codec import encode_awp1
+
+            selected_message = message(
+                task=selected.aliases["T"],
+                evidence=[selected.aliases["E"]],
+                constraints=[selected.aliases["C"]],
+                dictionary_version=selected.version,
+            )
+            payload = encode_awp1(selected_message, selected)
         request = prompts.build_direct_model_request(
-            common, candidate_id, "SYNTHETIC_PAYLOAD", dictionary=selected
+            common, candidate_id, payload, dictionary=selected
         )
         assert common in request
-        assert request.index(common) < request.index("SYNTHETIC_PAYLOAD")
+        assert request.index(common) < request.index(payload)
+        if selected is not None:
+            identity = dictionary_identity_for(selected)
+            identity_json = json.dumps(
+                [identity.user_id, identity.version, identity.sha256],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            assert identity_json in request
 
 
 def test_direct_request_uses_format_instructions_and_complete_awp1_glossary(prompts):
@@ -297,8 +316,17 @@ def test_direct_request_uses_format_instructions_and_complete_awp1_glossary(prom
     assert "AC2" in ac2 and "eleven" in ac2 and "message_type" in ac2
 
     selected = dictionary()
+    from agentcodec.agentwire.codec import encode_awp1
+
+    selected_message = message(
+        task=selected.aliases["T"],
+        evidence=[selected.aliases["E"]],
+        constraints=[selected.aliases["C"]],
+        dictionary_version=selected.version,
+    )
     awp1 = prompts.build_direct_model_request(
-        common, "awp1_dictionary", "AWP1|synthetic", dictionary=selected
+        common, "awp1_dictionary", encode_awp1(selected_message, selected),
+        dictionary=selected,
     )
     for enum_entry in (
         "delegate", "status", "result", "pending", "running", "blocked",
@@ -309,6 +337,65 @@ def test_direct_request_uses_format_instructions_and_complete_awp1_glossary(prom
         assert json.dumps(code, ensure_ascii=False) in awp1
         assert json.dumps(phrase, ensure_ascii=False) in awp1
     assert "dict-v1" in awp1
+
+
+def test_awp1_direct_request_binds_matching_selected_dictionary_identity(prompts):
+    from agentcodec.agentwire.codec import encode_awp1
+
+    selected = dictionary()
+    domain_message = message(
+        task=selected.aliases["T"],
+        evidence=[selected.aliases["E"]],
+        constraints=[selected.aliases["C"]],
+        dictionary_version=selected.version,
+    )
+    payload = encode_awp1(domain_message, selected)
+    identity = dictionary_identity_for(selected)
+    identity_json = json.dumps(
+        [identity.user_id, identity.version, identity.sha256],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+    request = prompts.build_direct_model_request(
+        "Shared task prompt.", "awp1_dictionary", payload, dictionary=selected
+    )
+
+    assert (
+        "Selected dictionary identity [user_id, dictionary_version, sha256]: "
+        + identity_json
+    ) in request
+    assert "Selected dictionary glossary" in request
+    assert json.dumps(selected.aliases["T"], ensure_ascii=False) in request
+
+
+def test_awp1_direct_request_rejects_mismatched_dictionary_hash_without_leakage(prompts):
+    from agentcodec.agentwire.codec import encode_awp1
+
+    selected = dictionary()
+    wire_dictionary = UserDictionary(
+        user_id=selected.user_id,
+        version=selected.version,
+        aliases=selected.aliases | {"T": "Wire-only synthetic phrase"},
+    )
+    wire_message = message(
+        task=wire_dictionary.aliases["T"],
+        evidence=[wire_dictionary.aliases["E"]],
+        constraints=[wire_dictionary.aliases["C"]],
+        dictionary_version=wire_dictionary.version,
+    )
+    payload = encode_awp1(wire_message, wire_dictionary)
+    assert dictionary_identity_for(wire_dictionary) != dictionary_identity_for(selected)
+
+    with pytest.raises(ValueError) as exc_info:
+        prompts.build_direct_model_request(
+            "Shared task prompt.", "awp1_dictionary", payload, dictionary=selected
+        )
+
+    assert str(exc_info.value) == "direct model request rejected"
+    assert payload not in str(exc_info.value)
+    assert "Wire-only synthetic phrase" not in str(exc_info.value)
+    assert "Review exact task" not in str(exc_info.value)
 
 
 def test_natural_language_direct_requests_add_no_compact_protocol_legend(prompts):

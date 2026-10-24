@@ -8,8 +8,12 @@ from typing import get_args
 
 from pydantic import ValidationError
 
+from agentcodec.agentwire.codec import decode_awp1
 from agentcodec.agentwire.contracts import (
+    AgentWireError,
     BenchmarkCandidate,
+    DictionaryIdentity,
+    ReceiverCapabilities,
     dictionary_identity_for,
 )
 from agentcodec.schema import UserDictionary
@@ -89,16 +93,43 @@ _FORMAT_INSTRUCTIONS = {
 
 def _selected_dictionary_snapshot(
     dictionary: UserDictionary | None,
-) -> UserDictionary:
+) -> tuple[UserDictionary, DictionaryIdentity]:
     if not isinstance(dictionary, UserDictionary):
         raise ValueError("direct model request rejected") from None
     try:
         snapshot = UserDictionary.model_validate(
             copy.deepcopy(dictionary.model_dump(mode="python")), strict=True
         )
-        dictionary_identity_for(snapshot)
-        return snapshot
+        identity = dictionary_identity_for(snapshot)
+        return snapshot, identity
     except (ValidationError, TypeError, ValueError, AttributeError, RecursionError):
+        raise ValueError("direct model request rejected") from None
+
+
+def _validate_awp1_dictionary_payload(
+    wire_payload: str,
+    dictionary: UserDictionary,
+    identity: DictionaryIdentity,
+) -> None:
+    """Use the strict decoder to bind an AWP1 envelope to this selected glossary."""
+    try:
+        receiver = ReceiverCapabilities(
+            user_id=identity.user_id,
+            supported_profile_versions=("AWP1",),
+            supported_schema_versions=("MessageV1",),
+            supported_enum_table_versions=("AWP1",),
+            max_message_bytes=max(1, len(wire_payload.encode("utf-8"))),
+            dictionary_identity=identity,
+        )
+        decode_awp1(wire_payload, receiver, dictionary=dictionary)
+    except (
+        AgentWireError,
+        ValidationError,
+        TypeError,
+        ValueError,
+        AttributeError,
+        RecursionError,
+    ):
         raise ValueError("direct model request rejected") from None
 
 
@@ -118,11 +149,17 @@ def build_direct_model_request(
 
     uses_dictionary = candidate_id in _DICTIONARY_CANDIDATES
     if uses_dictionary:
-        dictionary_snapshot = _selected_dictionary_snapshot(dictionary)
+        dictionary_snapshot, selected_identity = _selected_dictionary_snapshot(dictionary)
     else:
         if dictionary is not None:
             raise ValueError("direct model request rejected") from None
         dictionary_snapshot = None
+        selected_identity = None
+
+    if candidate_id == "awp1_dictionary":
+        _validate_awp1_dictionary_payload(
+            wire_payload, dictionary_snapshot, selected_identity
+        )
 
     sections = [context_prefix]
     instruction_key = candidate_id.removesuffix("_dictionary")
@@ -131,6 +168,15 @@ def build_direct_model_request(
     sections.append("Payload:\n" + wire_payload)
 
     if dictionary_snapshot is not None:
+        identity_values = [
+            selected_identity.user_id,
+            selected_identity.version,
+            selected_identity.sha256,
+        ]
+        sections.append(
+            "Selected dictionary identity [user_id, dictionary_version, sha256]: "
+            + json.dumps(identity_values, ensure_ascii=False, separators=(",", ":"))
+        )
         glossary = {
             "user_id": dictionary_snapshot.user_id,
             "version": dictionary_snapshot.version,
