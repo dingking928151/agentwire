@@ -207,6 +207,17 @@ def test_gateway_delivery_enforces_decoded_fallback_and_pass_through_states(cont
                 reason_code=None,
             )
 
+    sentinel = "SENTINEL_TEST"
+    with pytest.raises(ValidationError) as exc_info:
+        contracts.GatewayDelivery(
+            candidate_id="awp1",
+            decode_status="decoded",
+            pass_through_text=None,
+            reason_code=None,
+            model_context=f"MODEL_CONTEXT_{sentinel}",
+        )
+    assert sentinel not in str(exc_info.value)
+
     fallback = contracts.GatewayDelivery(
         candidate_id="json",
         decode_status="fallback_required",

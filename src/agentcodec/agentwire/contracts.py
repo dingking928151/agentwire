@@ -49,7 +49,12 @@ _REASON_CODE_ADAPTER = TypeAdapter(AgentWireReasonCode)
 
 
 class _StrictFrozenModel(BaseModel):
-    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+    model_config = ConfigDict(
+        strict=True,
+        frozen=True,
+        extra="forbid",
+        hide_input_in_errors=True,
+    )
 
 
 class DictionaryIdentity(_StrictFrozenModel):
