@@ -2,6 +2,7 @@
 
 import hashlib
 import importlib
+import json
 from typing import get_args
 
 import pytest
@@ -168,14 +169,43 @@ def test_results_enforce_success_failure_invariants(contracts):
 
 
 def test_gateway_delivery_enforces_decoded_fallback_and_pass_through_states(contracts):
+    valid_message = message()
+    canonical_context = json.dumps(
+        valid_message.model_dump(), ensure_ascii=False, separators=(",", ":")
+    )
     decoded = contracts.GatewayDelivery(
         candidate_id="awp1",
         decode_status="decoded",
-        model_context=message().model_dump_json(),
+        model_context=canonical_context,
         pass_through_text=None,
         reason_code=None,
     )
-    assert decoded.model_context
+    assert decoded.model_context == canonical_context
+
+    noncanonical_contexts = (
+        "not JSON",
+        "{}",
+        json.dumps(
+            valid_message.model_dump() | {"status": "not-a-message-status"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+        json.dumps(valid_message.model_dump(), ensure_ascii=False, separators=(", ", ": ")),
+        json.dumps(
+            dict(reversed(list(valid_message.model_dump().items()))),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+    )
+    for context in noncanonical_contexts:
+        with pytest.raises(ValidationError):
+            contracts.GatewayDelivery(
+                candidate_id="awp1",
+                decode_status="decoded",
+                model_context=context,
+                pass_through_text=None,
+                reason_code=None,
+            )
 
     fallback = contracts.GatewayDelivery(
         candidate_id="json",
@@ -245,8 +275,10 @@ def test_public_exports_and_agentwire_error_are_stable_and_nonrevealing(contract
     error = contracts.AgentWireError("invalid_message")
     assert error.reason_code == "invalid_message"
     assert str(error) == "agentwire operation rejected"
-    with pytest.raises((ValidationError, ValueError, TypeError)):
-        contracts.AgentWireError("sensitive user text")
+    sentinel = "SENSITIVE_SENTINEL_TEST"
+    with pytest.raises((ValidationError, ValueError, TypeError)) as exc_info:
+        contracts.AgentWireError(sentinel)
+    assert sentinel not in str(exc_info.value)
 
     with pytest.raises(ValidationError):
         contracts.DictionaryIdentity(**identity_values(sha256="g" * 64))

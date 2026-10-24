@@ -7,7 +7,15 @@ import hashlib
 import json
 from typing import Annotated, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, PositiveInt, StringConstraints, TypeAdapter, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    PositiveInt,
+    StringConstraints,
+    TypeAdapter,
+    ValidationError,
+    model_validator,
+)
 from agentcodec.schema import Identifier, MessageV1, UserDictionary
 
 
@@ -116,6 +124,23 @@ class GatewayDelivery(_StrictFrozenModel):
                 or self.reason_code is not None
             ):
                 raise ValueError("decoded delivery fields are inconsistent")
+            try:
+                decoded_message = MessageV1.model_validate(
+                    json.loads(self.model_context), strict=True
+                )
+                canonical_context = json.dumps(
+                    decoded_message.model_dump(),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            except (json.JSONDecodeError, TypeError, ValueError, ValidationError):
+                raise ValueError(
+                    "decoded model_context must be canonical MessageV1 JSON"
+                ) from None
+            if self.model_context != canonical_context:
+                raise ValueError(
+                    "decoded model_context must be canonical MessageV1 JSON"
+                )
         elif self.decode_status == "fallback_required":
             if (
                 self.model_context is not None
@@ -137,7 +162,10 @@ class AgentWireError(Exception):
     """An error exposing only one stable, non-sensitive reason code."""
 
     def __init__(self, reason_code: AgentWireReasonCode) -> None:
-        validated = _REASON_CODE_ADAPTER.validate_python(reason_code, strict=True)
+        try:
+            validated = _REASON_CODE_ADAPTER.validate_python(reason_code, strict=True)
+        except ValidationError:
+            raise ValueError("invalid AgentWire reason code") from None
         self.reason_code: AgentWireReasonCode = validated
         super().__init__("agentwire operation rejected")
 
