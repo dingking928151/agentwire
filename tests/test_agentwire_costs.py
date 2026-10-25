@@ -207,6 +207,23 @@ def test_same_id_with_changed_text_or_surface_is_rejected(api, monkeypatch):
     assert calls == []
 
 
+def test_cost_event_rejects_missing_parts_but_allows_explicit_empty_text(api, monkeypatch):
+    with pytest.raises(ValidationError):
+        event("missing-parts", "request", ("transport",))
+
+    explicit_empty = event(
+        "explicit-empty-text", "request", ("transport",), part("payload", ""),
+    )
+    calls = stub_meter(monkeypatch, {"explicit-empty-text": (0, (0,))})
+    result = api.measure_cost_events((explicit_empty,), profile())
+
+    assert result.status == "exact_local_text"
+    assert result.distinct_text_event_tokens == 0
+    assert len(calls[0][0]) == 1
+    assert len(calls[0][0][0].components) == 1
+    assert calls[0][0][0].components[0].text == ""
+
+
 def test_break_even_is_reported_separately_for_each_baseline(api):
     labelled = api.calculate_break_even(30, 5, 100, 20)
     freeform = api.calculate_break_even(30, 5, 0, 20)
@@ -219,6 +236,14 @@ def test_break_even_is_reported_separately_for_each_baseline(api):
     assert (equal_cost.status, equal_cost.first_strict_win) == ("never", None)
     assert (delayed.status, delayed.first_strict_win) == ("finite", 6)
     assert (never.status, never.first_strict_win) == ("never", None)
+
+
+def test_break_even_unknown_cost_returns_cannot_compare_without_threshold(api):
+    result = api.calculate_break_even(None, 5, 0, 20)
+
+    assert result.status == "cannot_compare"
+    assert result.first_strict_win is None
+    assert result.reason_code == "required_cost_unknown"
 
 
 def test_negative_costs_and_zero_reuse_are_rejected(api):

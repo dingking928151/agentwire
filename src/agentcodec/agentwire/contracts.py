@@ -228,7 +228,7 @@ class CostEvent(_StrictFrozenModel):
     kind: CostEventKind
     simulated: Literal[True] = True
     surfaces: tuple[CostSurface, ...]
-    parts: tuple[CostPart, ...]
+    parts: Annotated[tuple[CostPart, ...], Field(min_length=1)]
     multiplicity: PositiveInt = 1
 
     @model_validator(mode="after")
