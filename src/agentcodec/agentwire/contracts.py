@@ -10,13 +10,14 @@ from typing import Annotated, Literal, TypeAlias
 from pydantic import (
     BaseModel,
     ConfigDict,
+    Field,
     PositiveInt,
     StringConstraints,
     TypeAdapter,
     ValidationError,
     model_validator,
 )
-from agentcodec.schema import Identifier, MessageV1, UserDictionary
+from agentcodec.schema import Identifier, MessageV1, UnicodeText, UserDictionary
 
 
 Sha256Hex: TypeAlias = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
@@ -44,6 +45,30 @@ AgentWireReasonCode: TypeAlias = Literal[
     "unknown_alias",
     "invalid_message",
 ]
+CostPartLabel: TypeAlias = Literal[
+    "setup", "negotiation", "protocol_instructions", "context",
+    "dictionary_glossary", "dictionary_transfer", "payload", "response",
+    "retry", "fallback", "other",
+]
+CostEventKind: TypeAlias = Literal[
+    "setup", "negotiation", "dictionary_distribution", "request",
+    "response", "retry", "fallback",
+]
+CostSurface: TypeAlias = Literal["transport", "model_input", "model_output"]
+CostUnavailableReason: TypeAlias = Literal[
+    "tokenizer_unavailable", "profile_unreliable", "surrogate_only",
+]
+NonnegativeInt = Annotated[int, Field(ge=0)]
+
+COST_PART_LABELS = (
+    "setup", "negotiation", "protocol_instructions", "context",
+    "dictionary_glossary", "dictionary_transfer", "payload", "response",
+    "retry", "fallback", "other",
+)
+COST_EVENT_KINDS = (
+    "setup", "negotiation", "dictionary_distribution", "request",
+    "response", "retry", "fallback",
+)
 
 _REASON_CODE_ADAPTER = TypeAdapter(AgentWireReasonCode)
 
@@ -191,3 +216,79 @@ def dictionary_identity_for(dictionary: UserDictionary) -> DictionaryIdentity:
         version=validated.version,
         sha256=hashlib.sha256(canonical).hexdigest(),
     )
+
+
+class CostPart(_StrictFrozenModel):
+    label: CostPartLabel
+    text: UnicodeText
+
+
+class CostEvent(_StrictFrozenModel):
+    event_id: Identifier
+    kind: CostEventKind
+    simulated: Literal[True] = True
+    surfaces: tuple[CostSurface, ...]
+    parts: tuple[CostPart, ...]
+    multiplicity: PositiveInt = 1
+
+    @model_validator(mode="after")
+    def require_distinct_surfaces(self) -> CostEvent:
+        if not self.surfaces or len(set(self.surfaces)) != len(self.surfaces):
+            raise ValueError("cost event surfaces must be nonempty and distinct")
+        return self
+
+
+class CostSummary(_StrictFrozenModel):
+    status: Literal["exact_local_text", "cannot_compare"]
+    reason_code: CostUnavailableReason | None
+    transport_bytes: NonnegativeInt
+    transport_tokens: NonnegativeInt | None
+    model_input_tokens: NonnegativeInt | None
+    model_output_tokens: NonnegativeInt | None
+    distinct_text_event_tokens: NonnegativeInt | None
+    event_kind_tokens: dict[CostEventKind, NonnegativeInt] | None
+    part_label_tokens: dict[CostPartLabel, int] | None
+
+    @model_validator(mode="after")
+    def consistent_measurement_state(self) -> CostSummary:
+        token_values = (
+            self.transport_tokens,
+            self.model_input_tokens,
+            self.model_output_tokens,
+            self.distinct_text_event_tokens,
+        )
+        if self.status == "cannot_compare":
+            if self.reason_code is None or any(value is not None for value in token_values):
+                raise ValueError("unknown measurement must not report token totals")
+            if self.event_kind_tokens is not None or self.part_label_tokens is not None:
+                raise ValueError("unknown measurement must not report token breakdowns")
+            return self
+        if self.reason_code is not None or any(value is None for value in token_values):
+            raise ValueError("exact measurement requires complete token totals")
+        if self.event_kind_tokens is None or self.part_label_tokens is None:
+            raise ValueError("exact measurement requires token breakdowns")
+        if (set(self.event_kind_tokens) != set(COST_EVENT_KINDS)
+                or set(self.part_label_tokens) != set(COST_PART_LABELS)):
+            raise ValueError("exact measurement breakdowns must be complete")
+        if (sum(self.event_kind_tokens.values()) != self.distinct_text_event_tokens
+                or sum(self.part_label_tokens.values()) != self.distinct_text_event_tokens):
+            raise ValueError("event and part totals must conserve complete event tokens")
+        return self
+
+
+class BreakEvenResult(_StrictFrozenModel):
+    status: Literal["finite", "never", "cannot_compare"]
+    first_strict_win: PositiveInt | None
+    reason_code: Literal["required_cost_unknown"] | None
+
+    @model_validator(mode="after")
+    def consistent_break_even_state(self) -> BreakEvenResult:
+        if self.status == "finite":
+            if self.first_strict_win is None or self.reason_code is not None:
+                raise ValueError("finite break-even requires a first strict win")
+        elif self.status == "never":
+            if self.first_strict_win is not None or self.reason_code is not None:
+                raise ValueError("never-winning break-even has no threshold")
+        elif self.first_strict_win is not None or self.reason_code is None:
+            raise ValueError("incomparable break-even requires an unknown-cost reason")
+        return self
