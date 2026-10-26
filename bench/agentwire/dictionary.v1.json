@@ -1,0 +1,16 @@
+{
+  "user_id": "synthetic-user",
+  "version": "synthetic-dictionary-v1",
+  "aliases": {
+    "S1": "Run synthetic check.",
+    "S2": "Record the status.",
+    "S3": "synthetic-check",
+    "S4": "Use local synthetic data only.",
+    "S5": "Do not publish.",
+    "S6": "Wait for test summary.",
+    "S7": "Keep source unchanged.",
+    "S8": "Ask review owner.",
+    "S9": "Compare two counts.",
+    "S10": "Retain duplicate entries."
+  }
+}
