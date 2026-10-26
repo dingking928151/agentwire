@@ -487,10 +487,7 @@ def _has_incomplete_state(
         protocol_unknown = True
         unknown_text = False
     else:
-        protocol_unknown = (
-            state.state == "unknown_history"
-            or (state.state == "ready_history" and not state.history_complete)
-        )
+        protocol_unknown = state.state == "unknown_history" or not state.history_complete
         unknown_text = (
             (state.state == "cold_text_setup" and state.setup_text is None)
             or (state.negotiation_required and state.negotiation_text is None)
@@ -500,10 +497,7 @@ def _has_incomplete_state(
         dictionary_unknown = False
     else:
         exposure = scenario.dictionary_candidate_exposure
-        dictionary_unknown = (
-            exposure.state == "unknown_history"
-            or (exposure.state == "ready_history" and not exposure.history_complete)
-        )
+        dictionary_unknown = exposure.state == "unknown_history" or not exposure.history_complete
         unknown_text = unknown_text or (
             exposure.state == "cold_text_setup" and exposure.setup_text is None
         )
@@ -724,6 +718,10 @@ def _make_candidate_metrics(
         unknown_text = True
 
     profile_known = summary is not None and summary.status == "exact_local_text"
+    gateway_decode_incomplete = (
+        mode == "gateway" and candidate != "natural_language_freeform"
+        and strict_successes != len(scenario.cases)
+    )
     state_unknown = protocol_unknown or dictionary_unknown
     if summary is None:
         transport_bytes = None
@@ -732,6 +730,8 @@ def _make_candidate_metrics(
 
     def event_kind(kind: str) -> int | None:
         if not profile_known or state_unknown or unknown_text:
+            return None
+        if gateway_decode_incomplete and kind in {"response", "retry", "fallback"}:
             return None
         return summary.event_kind_tokens[kind]
 
@@ -775,12 +775,17 @@ def _make_candidate_metrics(
             if not unknown_text else None
         )
         model_input_tokens = (
-            summary.model_input_tokens if not state_unknown and not unknown_text else None
+            summary.model_input_tokens
+            if not state_unknown and not unknown_text and not gateway_decode_incomplete else None
         )
         synthetic_response_tokens = (
-            summary.model_output_tokens if not state_unknown and not unknown_text else None
+            summary.model_output_tokens
+            if not state_unknown and not unknown_text and not gateway_decode_incomplete else None
         )
-        distinct_tokens = summary.distinct_text_event_tokens if not state_unknown and not unknown_text else None
+        distinct_tokens = (
+            summary.distinct_text_event_tokens
+            if not state_unknown and not unknown_text and not gateway_decode_incomplete else None
+        )
     else:
         protocol_exposure = None
         dictionary_exposure_cost = None
@@ -796,7 +801,7 @@ def _make_candidate_metrics(
         summary.transport_tokens if profile_known and not state_unknown and not unknown_text else None
     )
     if (
-        profile_known and not state_unknown and not unknown_text
+        profile_known and not state_unknown and not unknown_text and not gateway_decode_incomplete
         and scenario.reuse.unit in _SUPPORTED_REUSE_UNITS
     ):
         per_use_summary = measure_cost_events(tuple(per_use_events), profile)
@@ -820,6 +825,8 @@ def _make_candidate_metrics(
         metric_status = "cannot_compare"
     elif freeform_gateway:
         metric_status = "transport_only"
+    elif gateway_decode_incomplete:
+        metric_status = "cannot_compare"
     else:
         metric_status = "exact_local_text"
 
@@ -900,6 +907,16 @@ def _comparison(
     if (
         baseline_row is None or candidate_row.metric_status != "exact_local_text"
         or baseline_row.metric_status != "exact_local_text"
+        or (
+            candidate_row.receiver_mode == "gateway"
+            and candidate_row.metric_surface != "transport_only"
+            and candidate_row.strict_decode_status != "decoded"
+        )
+        or (
+            baseline_row.receiver_mode == "gateway"
+            and baseline_row.metric_surface != "transport_only"
+            and baseline_row.strict_decode_status != "decoded"
+        )
         or candidate_row.lifecycle_cost_tokens is None
         or baseline_row.lifecycle_cost_tokens is None
         or candidate_setup is None or candidate_per_use is None

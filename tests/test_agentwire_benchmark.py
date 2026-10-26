@@ -780,3 +780,87 @@ def test_source_domain_rejects_dictionary_history_instead_of_borrowing_setup(api
             dictionary_exposure=api.DictionaryExposure(state="ready_history"),
             dictionary_history=(history,),
         )
+
+
+def test_gateway_decode_failure_keeps_attempt_cost_but_blocks_lifecycle_comparison(api, monkeypatch):
+    import agentcodec.agentwire.benchmark as benchmark_module
+
+    cases = _cases(api, _fixture_records()[:1])
+    failed_payload = "{broken synthetic JSON"
+    monkeypatch.setattr(benchmark_module, "render_json", lambda message: failed_payload)
+    report = _run(api, (_scenario(api, cases),), monkeypatch)
+    row = _row(_domain_report(report, "source"), candidate="json", mode="gateway")
+
+    assert row.strict_decode_status == "fallback_required"
+    assert row.metric_status == "cannot_compare"
+    assert row.case_count == 1
+    assert row.event_count == 1
+    assert row.transport_bytes == len(failed_payload.encode("utf-8"))
+    assert row.transport_tokens == len(failed_payload.encode("utf-8"))
+    assert row.request_tokens == len(failed_payload.encode("utf-8"))
+    assert row.model_input_tokens is None
+    assert row.synthetic_response_tokens is None
+    assert row.response_tokens is None
+    assert row.retry_tokens is None
+    assert row.fallback_tokens is None
+    assert row.distinct_text_event_tokens is None
+    assert row.per_use_cost_tokens is None
+    assert row.amortized_cost_tokens is None
+    assert row.lifecycle_cost_tokens is None
+    assert row.vs_natural_language_labelled.status == "cannot_compare"
+    assert row.vs_natural_language_labelled.cost_delta_tokens is None
+    assert row.vs_natural_language_labelled.break_even_status == "cannot_compare"
+
+
+def test_cold_protocol_setup_with_incomplete_history_is_not_exact(api, monkeypatch):
+    cases = _cases(api, _fixture_records()[:1])
+    partial_history = _event(
+        "synthetic-partial-protocol-history", "setup", "setup",
+        "partial synthetic protocol history",
+    )
+    scenario = _scenario(
+        api, cases,
+        states={"json": api.ProtocolState(
+            candidate_id="json", profile_id=PROFILE_ID,
+            state="cold_text_setup", setup_text="Synthetic protocol setup text.",
+            history=(partial_history,), history_complete=False,
+        )},
+    )
+    report = _run(api, (scenario,), monkeypatch)
+    row = _row(_domain_report(report, "source"), candidate="json", mode="gateway")
+
+    assert row.metric_status == "cannot_compare"
+    assert row.candidate_protocol_setup_history_tokens is None
+    assert row.candidate_protocol_setup_tokens is None
+    assert row.lifecycle_cost_tokens is None
+    assert row.amortized_cost_tokens is None
+    assert row.vs_natural_language_labelled.status == "cannot_compare"
+
+
+def test_cold_dictionary_exposure_with_incomplete_history_is_not_exact(api, monkeypatch):
+    cases = _cases(api, _fixture_records()[:1])
+    dictionary = _dictionary()
+    partial_history = _event(
+        "synthetic-partial-dictionary-history", "dictionary_distribution",
+        "dictionary_transfer", "partial synthetic dictionary history",
+    )
+    scenario = _scenario(
+        api, cases, domain="selected_dictionary_transport", dictionary=dictionary,
+        dictionary_exposure=api.DictionaryExposure(
+            state="cold_text_setup", setup_text="Synthetic dictionary setup text.",
+            history_complete=False,
+        ),
+        dictionary_history=(partial_history,),
+    )
+    report = _run(api, (scenario,), monkeypatch, dictionary=dictionary)
+    row = _row(
+        _domain_report(report, "selected_dictionary_transport"),
+        candidate="ac1_dictionary", mode="gateway",
+    )
+
+    assert row.metric_status == "cannot_compare"
+    assert row.dictionary_history_tokens is None
+    assert row.dictionary_setup_tokens is None
+    assert row.lifecycle_cost_tokens is None
+    assert row.amortized_cost_tokens is None
+    assert row.vs_natural_language_labelled.status == "cannot_compare"
