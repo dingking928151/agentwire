@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -306,6 +307,262 @@ def benchmark_adaptive_cli(
     """Write independent local diagnostics, not model or provider evidence."""
     from .adaptive.cli import benchmark_adaptive_command
     benchmark_adaptive_command(config, output_dir)
+
+
+_AGENTWIRE_FIXTURE_MANIFEST_ID = "agentwire-synthetic-fixtures-v1"
+_AGENTWIRE_TOKENIZERS = ("o200k_base", "cl100k_base")
+_AGENTWIRE_MODES = ("gateway", "model_direct")
+_AGENTWIRE_CANDIDATES = (
+    "natural_language", "natural_language_freeform", "json", "ac1",
+    "ac1_dictionary", "ac2", "ac2_dictionary", "awp1", "awp1_dictionary",
+)
+_AGENTWIRE_REUSE_COUNTS = (1, 10, 50)
+
+
+def _agentwire_csv(value: str, allowed: tuple[str, ...], option: str) -> tuple[str, ...]:
+    parts = value.split(",")
+    if (not value or any(part not in allowed for part in parts)
+            or len(parts) != len(set(parts))):
+        raise typer.BadParameter("select unique supported values", param_hint=option)
+    return tuple(parts)
+
+
+def _agentwire_reuse_counts(value: str, option: str) -> tuple[int, ...]:
+    parts = value.split(",")
+    allowed = tuple(str(count) for count in _AGENTWIRE_REUSE_COUNTS)
+    if (not value or any(part not in allowed for part in parts)
+            or len(parts) != len(set(parts))):
+        raise typer.BadParameter("select unique counts from 1, 10, 50", param_hint=option)
+    return tuple(int(part) for part in parts)
+
+
+def _agentwire_output_preflight(output_dir: Path) -> Path:
+    """Accept only an absent or empty real directory outside fixed inputs."""
+    output_dir = Path(os.path.abspath(os.fspath(output_dir)))
+    if any(path.is_symlink() for path in (output_dir, *output_dir.parents)):
+        raise ValueError("invalid output directory")
+    fixture_dir = Path(__file__).resolve().parents[2] / "bench" / "agentwire"
+    resolved = output_dir.resolve(strict=False)
+    fixture_dir = fixture_dir.resolve()
+    if resolved == fixture_dir or resolved in fixture_dir.parents or fixture_dir in resolved.parents:
+        raise ValueError("output directory collides with fixed fixtures")
+    try:
+        info = output_dir.lstat()
+    except FileNotFoundError:
+        info = None
+    if info is not None:
+        if not stat.S_ISDIR(info.st_mode) or any(output_dir.iterdir()):
+            raise ValueError("output directory must be new or empty")
+        writable_parent = output_dir
+    else:
+        writable_parent = output_dir.parent
+        if not writable_parent.is_dir():
+            raise ValueError("output directory parent must exist")
+    if not os.access(writable_parent, os.W_OK | os.X_OK):
+        raise OSError("output directory is not writable")
+    return output_dir
+
+
+def _agentwire_write(output_dir: Path, contents: bytes) -> None:
+    output_dir = _agentwire_output_preflight(output_dir)
+    created_directory = False
+    directory_identity = None
+    report_path = output_dir / "report.json"
+    file_identity = None
+    try:
+        if not output_dir.exists():
+            output_dir.mkdir()
+            directory_stat = output_dir.lstat()
+            directory_identity = (directory_stat.st_dev, directory_stat.st_ino)
+            created_directory = True
+        _agentwire_output_preflight(output_dir)
+        with report_path.open("xb") as stream:
+            file_stat = os.fstat(stream.fileno())
+            file_identity = (file_stat.st_dev, file_stat.st_ino)
+            if stream.write(contents) != len(contents):
+                raise OSError("incomplete report write")
+            stream.flush()
+            os.fsync(stream.fileno())
+    except BaseException:
+        if file_identity is not None:
+            try:
+                current = report_path.lstat()
+                if (current.st_dev, current.st_ino) == file_identity:
+                    report_path.unlink()
+            except OSError:
+                pass
+        if created_directory:
+            try:
+                current = output_dir.lstat()
+                if ((current.st_dev, current.st_ino) == directory_identity
+                        and not any(output_dir.iterdir())):
+                    output_dir.rmdir()
+            except OSError:
+                pass
+        raise
+
+
+def _agentwire_fixed_inputs():
+    from .agentwire.benchmark import BenchmarkCase
+    from .schema import MessageV1, UserDictionary
+
+    fixture_dir = Path(__file__).resolve().parents[2] / "bench" / "agentwire"
+    exchanges_path = fixture_dir / "exchanges.v1.jsonl"
+    dictionary_path = fixture_dir / "dictionary.v1.json"
+    exchanges_text = exchanges_path.read_bytes().decode("utf-8")
+    dictionary_text = dictionary_path.read_bytes().decode("utf-8")
+    cases = []
+    for line in exchanges_text.split("\n"):
+        if not line.strip():
+            continue
+        record = json.loads(line, object_pairs_hook=_unique_object)
+        cases.append(BenchmarkCase(
+            case_id=record["case_id"],
+            task_prompt=record["task_prompt"],
+            source_message=MessageV1.model_validate(record["source_message"], strict=True),
+            freeform_text=record["freeform_text"],
+            freeform_annotations={key: tuple(items)
+                                  for key, items in record["freeform_annotations"].items()},
+            synthetic_response_fixture=record["synthetic_response_fixture"],
+        ))
+    if not cases:
+        raise ValueError("fixed benchmark fixtures rejected")
+    dictionary = UserDictionary.model_validate(
+        json.loads(dictionary_text, object_pairs_hook=_unique_object), strict=True,
+    )
+    user_ids = {case.source_message.user_id for case in cases}
+    if len(user_ids) != 1 or dictionary.user_id not in user_ids:
+        raise ValueError("fixed benchmark fixtures rejected")
+    return tuple(cases), dictionary
+
+
+def _agentwire_profiles(tokenizer_names: tuple[str, ...]):
+    from importlib.metadata import PackageNotFoundError, version
+
+    from .adaptive.contracts import TokenizerProfile
+    from .benchmark import _VOCAB_HASHES
+
+    try:
+        library_version = version("tiktoken")
+    except PackageNotFoundError:
+        # The meter will report cannot_compare; profile construction must not fetch anything.
+        library_version = "unavailable"
+    return {
+        name: TokenizerProfile(
+            encoding_name=name,
+            library_version=library_version,
+            vocabulary_sha256=_VOCAB_HASHES[name],
+            accuracy="exact_local_text",
+            mapping_basis="verified fixed local tokenizer vocabulary only",
+        )
+        for name in tokenizer_names
+    }
+
+
+def _agentwire_scenarios(cases, dictionary, tokenizer_names: tuple[str, ...]):
+    from .agentwire.benchmark import (
+        BenchmarkScenario, DictionaryExposure, ProtocolState, ReuseScenario,
+    )
+    from .agentwire.contracts import ReceiverCapabilities, dictionary_identity_for
+
+    dictionary_identity = dictionary_identity_for(dictionary)
+    user_id = cases[0].source_message.user_id
+    scenarios = []
+    for domain in ("source", "selected_dictionary_transport"):
+        for unit in ("same_message_instance", "whole_corpus_pass"):
+            groups = (
+                tuple((index, (case,)) for index, case in enumerate(cases, start=1))
+                if unit == "same_message_instance" else ((0, cases),)
+            )
+            for ordinal, group in groups:
+                receiver = ReceiverCapabilities(
+                    user_id=user_id,
+                    supported_profile_versions=("AWP1",),
+                    supported_schema_versions=("MessageV1",),
+                    supported_enum_table_versions=("AWP1",),
+                    max_message_bytes=2_000_000,
+                    dictionary_identity=(dictionary_identity
+                                         if domain == "selected_dictionary_transport" else None),
+                )
+                states = tuple(
+                    ProtocolState(
+                        candidate_id=candidate,
+                        profile_id=profile_id,
+                        state="out_of_band_preinstalled",
+                    )
+                    for profile_id in tokenizer_names
+                    for candidate in _AGENTWIRE_CANDIDATES
+                )
+                scenarios.append(BenchmarkScenario(
+                    scenario_id=f"agentwire-{domain}-{unit}-{ordinal:03d}",
+                    scope_id="agentwire-cli-scope-v1",
+                    corpus_id="agentwire-exchanges-v1",
+                    metadata_domain=domain,
+                    receiver_capabilities=receiver,
+                    protocol_states=states,
+                    dictionary_candidate_exposure=DictionaryExposure(
+                        state=("out_of_band_preinstalled"
+                               if domain == "selected_dictionary_transport" else "not_applicable"),
+                    ),
+                    dictionary_history=(),
+                    cases=group,
+                    reuse=ReuseScenario(unit=unit, total_uses=_AGENTWIRE_REUSE_COUNTS),
+                ))
+    return tuple(scenarios)
+
+
+def _agentwire_redacted_report(report, tokenizer_names, instance_uses, corpus_passes, modes):
+    data = report.model_dump(mode="json")
+    filtered_scenarios = []
+    for scenario in data["scenarios"]:
+        reuse_counts = instance_uses if scenario["reuse_unit"] == "same_message_instance" else corpus_passes
+        scenario["rows"] = [
+            row for row in scenario["rows"]
+            if (row["tokenizer_profile_id"] in tokenizer_names
+                and row["receiver_mode"] in modes
+                and row["total_uses"] in reuse_counts)
+        ]
+        filtered_scenarios.append(scenario)
+    return {
+        "version": data["version"],
+        "fixture_manifest_id": _AGENTWIRE_FIXTURE_MANIFEST_ID,
+        "scenarios": filtered_scenarios,
+        "notes": data["notes"],
+    }
+
+
+@app.command("benchmark-agentwire")
+def benchmark_agentwire_cli(
+    output_dir: Annotated[Path, typer.Option("--output-dir", help="New or empty local report directory.")],
+    tokenizers: Annotated[str, typer.Option("--tokenizers", help="Comma-separated o200k_base,cl100k_base.")] = "o200k_base,cl100k_base",
+    instance_uses: Annotated[str, typer.Option("--instance-uses", help="Reuse counts for one message instance: 1,10,50.")] = "1,10,50",
+    corpus_passes: Annotated[str, typer.Option("--corpus-passes", help="Reuse counts for a whole corpus pass: 1,10,50.")] = "1,10,50",
+    modes: Annotated[str, typer.Option("--modes", help="Comma-separated gateway,model_direct.")] = "gateway,model_direct",
+):
+    """Run the fixed synthetic AgentWire benchmark locally; never contacts a provider."""
+    tokenizer_names = _agentwire_csv(tokenizers, _AGENTWIRE_TOKENIZERS, "--tokenizers")
+    selected_modes = _agentwire_csv(modes, _AGENTWIRE_MODES, "--modes")
+    instance_counts = _agentwire_reuse_counts(instance_uses, "--instance-uses")
+    corpus_counts = _agentwire_reuse_counts(corpus_passes, "--corpus-passes")
+    try:
+        _agentwire_output_preflight(output_dir)
+        cases, dictionary = _agentwire_fixed_inputs()
+        profiles = _agentwire_profiles(tokenizer_names)
+        scenarios = _agentwire_scenarios(cases, dictionary, tokenizer_names)
+        from .agentwire.benchmark import run_agentwire_benchmark
+
+        report = run_agentwire_benchmark(scenarios, profiles, dictionary=dictionary)
+        public = _agentwire_redacted_report(
+            report, tokenizer_names, instance_counts, corpus_counts, selected_modes,
+        )
+        contents = (json.dumps(public, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8")
+        _agentwire_write(output_dir, contents)
+    except OSError:
+        typer.echo("agentwire_benchmark_io_error", err=True)
+        raise typer.Exit(code=1) from None
+    except (FallbackRequired, ValueError, TypeError, KeyError, RuntimeError, ImportError, RecursionError):
+        typer.echo("agentwire_benchmark_failed", err=True)
+        raise typer.Exit(code=1) from None
 
 
 if __name__ == "__main__":
