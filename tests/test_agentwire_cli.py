@@ -27,46 +27,130 @@ def invoke(app, args):
 
 
 def _fake_report():
-    return {
-        "version": "agentwire-benchmark-v1",
-        "scenarios": [
-            {
-                "metadata_domain": domain,
-                "reuse_unit": unit,
-                "source_hash": "a" * 64,
-                "transport_hash": "b" * 64,
-                "hash_basis": "opaque namespace identifiers only; not message or payload content",
-                "rows": [
-                    {
-                        "tokenizer_profile_id": profile,
-                        "receiver_mode": mode,
-                        "total_uses": count,
-                        "metric_status": "cannot_compare",
-                    }
-                    for profile in ("o200k_base", "cl100k_base")
-                    for mode in ("model_direct", "gateway")
-                    for count in (1, 10, 50)
-                ],
-            }
-            for domain in ("source", "selected_dictionary_transport")
-            for unit in ("same_message_instance", "whole_corpus_pass")
-        ],
-        "notes": ["synthetic fixture report"],
-    }
+    from agentcodec.agentwire.benchmark import (
+        AgentWireBenchmarkReport, BenchmarkComparison, BenchmarkRow, ScenarioReport,
+    )
+
+    comparison = BenchmarkComparison(
+        status="cannot_compare", cost_delta_tokens=None,
+        break_even_status="cannot_compare", first_strict_win=None,
+    )
+    base_row = BenchmarkRow(
+        synthetic_corpus_ordinal=1,
+        tokenizer_profile_id="o200k_base",
+        receiver_mode="gateway",
+        candidate_id="natural_language",
+        metric_surface="end_to_end",
+        metric_status="cannot_compare",
+        dictionary_condition="none",
+        dictionary_candidate_exposure="not_applicable",
+        reuse_unit="same_message_instance",
+        total_uses=1,
+        case_count=1,
+        event_count=1,
+        source_hash="a" * 64,
+        transport_hash="b" * 64,
+        transport_bytes=1,
+        transport_tokens=None,
+        model_input_tokens=None,
+        synthetic_response_tokens=None,
+        distinct_text_event_tokens=None,
+        candidate_protocol_exposure_tokens=None,
+        candidate_protocol_setup_history_tokens=None,
+        candidate_protocol_setup_tokens=None,
+        negotiation_tokens=None,
+        dictionary_exposure_tokens=None,
+        dictionary_history_tokens=None,
+        dictionary_setup_tokens=None,
+        request_tokens=None,
+        response_tokens=None,
+        retry_tokens=None,
+        fallback_tokens=None,
+        per_use_cost_tokens=None,
+        amortized_cost_tokens=None,
+        lifecycle_cost_tokens=None,
+        strict_decode_status="decoded",
+        strict_decode_success_count=1,
+        full_field_equal_count=1,
+        hard_field_equal_count=1,
+        vs_natural_language_labelled=comparison,
+        vs_natural_language_freeform=comparison,
+    )
+    scenarios = []
+    for domain in ("source", "selected_dictionary_transport"):
+        for unit in ("same_message_instance", "whole_corpus_pass"):
+            rows = tuple(
+                base_row.model_copy(update={
+                    "synthetic_corpus_ordinal": 1,
+                    "tokenizer_profile_id": profile,
+                    "receiver_mode": mode,
+                    "reuse_unit": unit,
+                    "total_uses": count,
+                })
+                for profile in ("o200k_base", "cl100k_base")
+                for mode in ("model_direct", "gateway")
+                for count in (1, 10, 50)
+            )
+            scenarios.append(ScenarioReport(
+                metadata_domain=domain,
+                reuse_unit=unit,
+                source_hash="a" * 64,
+                transport_hash="b" * 64,
+                rows=rows,
+            ))
+    return AgentWireBenchmarkReport(scenarios=tuple(scenarios))
 
 
-def _stub_runner(monkeypatch, captured=None):
+def _stub_runner(monkeypatch, captured=None, inject_private=False):
     benchmark = importlib.import_module("agentcodec.agentwire.benchmark")
 
     class Report:
+        def __init__(self, data):
+            self.data = data
+
         def model_dump(self, *, mode):
             assert mode == "json"
-            return _fake_report()
+            data = self.data
+            if inject_private:
+                data["input_hash"] = "c" * 64
+                data["absolute_path"] = str(ROOT / "bench" / "agentwire" / "exchanges.v1.jsonl")
+                data["private_note"] = "RAW-TOP-LEVEL-NOTE"
+                data["notes"].append("RAW-NOTE-WITH-PATH /private/absolute/path")
+                for scenario in data["scenarios"]:
+                    scenario.update({
+                        "scenario_id": "RAW-SCENARIO-ID",
+                        "scope_id": "RAW-SCOPE-ID",
+                        "user_id": "RAW-USER-ID",
+                        "corpus_id": "RAW-CORPUS-ID",
+                        "message": "RAW-MESSAGE-CONTENT",
+                        "dictionary": "RAW-DICTIONARY-CONTENT",
+                        "payload": "RAW-PAYLOAD-CONTENT",
+                        "absolute_path": "/private/scenario/path",
+                    })
+                    for row in scenario["rows"]:
+                        row.update({
+                            "input_hash": "d" * 64,
+                            "glossary": "RAW-GLOSSARY-CONTENT",
+                            "absolute_path": "/private/row/path",
+                        })
+                        row["vs_natural_language_labelled"]["payload"] = "RAW-NESTED-PAYLOAD"
+            return data
 
     def run(scenarios, profiles, dictionary=None):
         if captured is not None:
             captured.append((scenarios, profiles, dictionary))
-        return Report()
+        selected_by_unit = {}
+        for scenario in scenarios:
+            selected_by_unit.setdefault(scenario.reuse.unit, set()).update(
+                scenario.reuse.total_uses,
+            )
+        data = _fake_report().model_dump(mode="json")
+        for scenario_report in data["scenarios"]:
+            selected = selected_by_unit[scenario_report["reuse_unit"]]
+            scenario_report["rows"] = [
+                row for row in scenario_report["rows"] if row["total_uses"] in selected
+            ]
+        return Report(data)
 
     monkeypatch.setattr(benchmark, "run_agentwire_benchmark", run)
 
@@ -107,6 +191,45 @@ def test_benchmark_agentwire_writes_versioned_report(app, tmp_path, monkeypatch)
     assert "dictionary.v1.json" not in raw
     assert all("payload" not in key.lower() and "message" not in key.lower()
                for item in report["scenarios"] for row in item["rows"] for key in row)
+
+
+def test_report_allowlist_drops_hashes_and_private_values(app, tmp_path, monkeypatch):
+    _stub_runner(monkeypatch, inject_private=True)
+    output_dir = tmp_path / "strict-public-report"
+    result = invoke(app, [
+        "--output-dir", str(output_dir), "--tokenizers", "cl100k_base",
+        "--instance-uses", "1", "--corpus-passes", "1", "--modes", "gateway",
+    ])
+
+    assert result.exit_code == 0, result.output
+    raw = (output_dir / "report.json").read_text(encoding="utf-8")
+    report = json.loads(raw)
+
+    def recursive_keys_and_values(value):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                yield key
+                yield from recursive_keys_and_values(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from recursive_keys_and_values(child)
+        else:
+            yield value
+
+    serialized_values = tuple(recursive_keys_and_values(report))
+    assert not any(isinstance(value, str) and "hash" in value.lower()
+                   for value in serialized_values)
+    for secret_hash in ("a" * 64, "b" * 64, "c" * 64, "d" * 64):
+        assert secret_hash not in raw
+        assert secret_hash not in serialized_values
+    for private_value in (
+        "RAW-SCENARIO-ID", "RAW-SCOPE-ID", "RAW-USER-ID", "RAW-CORPUS-ID",
+        "RAW-MESSAGE-CONTENT", "RAW-DICTIONARY-CONTENT", "RAW-PAYLOAD-CONTENT",
+        "RAW-GLOSSARY-CONTENT", "RAW-NESTED-PAYLOAD", "RAW-TOP-LEVEL-NOTE",
+        "RAW-NOTE-WITH-PATH /private/absolute/path", "/private/scenario/path",
+        "/private/row/path", str(ROOT / "bench" / "agentwire" / "exchanges.v1.jsonl"),
+    ):
+        assert private_value not in raw
 
 
 def test_cli_import_has_no_tokenizer_or_network_side_effect():
@@ -202,13 +325,27 @@ def test_reuse_options_remain_separate(app, tmp_path, monkeypatch):
     assert {scenario.reuse.unit for scenario in scenarios} == {
         "same_message_instance", "whole_corpus_pass",
     }
-    assert all(scenario.reuse.total_uses == (1, 10, 50) for scenario in scenarios)
+    for scenario in scenarios:
+        wanted = (10,) if scenario.reuse.unit == "same_message_instance" else (50,)
+        assert scenario.reuse.total_uses == wanted
     report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
     for scenario in report["scenarios"]:
         wanted = {10} if scenario["reuse_unit"] == "same_message_instance" else {50}
         assert {row["total_uses"] for row in scenario["rows"]} == wanted
         assert {row["receiver_mode"] for row in scenario["rows"]} == {"gateway"}
         assert {row["tokenizer_profile_id"] for row in scenario["rows"]} == {"cl100k_base"}
+
+
+def test_reuse_defaults_pass_full_ranges_to_runner(app, tmp_path, monkeypatch):
+    captured = []
+    _stub_runner(monkeypatch, captured)
+    output_dir = tmp_path / "default-reuse"
+    result = invoke(app, ["--output-dir", str(output_dir)])
+
+    assert result.exit_code == 0, result.output
+    scenarios, _, _ = captured[0]
+    assert scenarios
+    assert all(scenario.reuse.total_uses == (1, 10, 50) for scenario in scenarios)
 
 
 @pytest.mark.parametrize("args", [

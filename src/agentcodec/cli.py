@@ -317,6 +317,27 @@ _AGENTWIRE_CANDIDATES = (
     "ac1_dictionary", "ac2", "ac2_dictionary", "awp1", "awp1_dictionary",
 )
 _AGENTWIRE_REUSE_COUNTS = (1, 10, 50)
+_AGENTWIRE_PUBLIC_ROW_FIELDS = (
+    "synthetic_corpus_ordinal", "tokenizer_profile_id", "receiver_mode", "candidate_id",
+    "metric_surface", "metric_status", "dictionary_condition",
+    "dictionary_candidate_exposure", "reuse_unit", "total_uses", "case_count",
+    "event_count", "transport_bytes", "transport_tokens", "model_input_tokens",
+    "synthetic_response_tokens", "distinct_text_event_tokens",
+    "candidate_protocol_exposure_tokens", "candidate_protocol_setup_history_tokens",
+    "candidate_protocol_setup_tokens", "negotiation_tokens", "dictionary_exposure_tokens",
+    "dictionary_history_tokens", "dictionary_setup_tokens", "request_tokens",
+    "response_tokens", "retry_tokens", "fallback_tokens", "per_use_cost_tokens",
+    "amortized_cost_tokens", "lifecycle_cost_tokens", "strict_decode_status",
+    "strict_decode_success_count", "full_field_equal_count", "hard_field_equal_count",
+)
+_AGENTWIRE_PUBLIC_COMPARISON_FIELDS = (
+    "status", "cost_delta_tokens", "break_even_status", "first_strict_win",
+)
+_AGENTWIRE_PUBLIC_NOTES = (
+    "Tokenizer counts are local text estimates, not provider billing.",
+    "No model or provider was contacted; response text is synthetic fixture data.",
+    "Decoder equality is structural only and does not measure model understanding or task quality.",
+)
 
 
 def _agentwire_csv(value: str, allowed: tuple[str, ...], option: str) -> tuple[str, ...]:
@@ -459,7 +480,10 @@ def _agentwire_profiles(tokenizer_names: tuple[str, ...]):
     }
 
 
-def _agentwire_scenarios(cases, dictionary, tokenizer_names: tuple[str, ...]):
+def _agentwire_scenarios(
+    cases, dictionary, tokenizer_names: tuple[str, ...],
+    instance_uses: tuple[int, ...], corpus_passes: tuple[int, ...],
+):
     from .agentwire.benchmark import (
         BenchmarkScenario, DictionaryExposure, ProtocolState, ReuseScenario,
     )
@@ -493,7 +517,7 @@ def _agentwire_scenarios(cases, dictionary, tokenizer_names: tuple[str, ...]):
                     for profile_id in tokenizer_names
                     for candidate in _AGENTWIRE_CANDIDATES
                 )
-                scenarios.append(BenchmarkScenario(
+                scenario = BenchmarkScenario(
                     scenario_id=f"agentwire-{domain}-{unit}-{ordinal:03d}",
                     scope_id="agentwire-cli-scope-v1",
                     corpus_id="agentwire-exchanges-v1",
@@ -507,27 +531,57 @@ def _agentwire_scenarios(cases, dictionary, tokenizer_names: tuple[str, ...]):
                     dictionary_history=(),
                     cases=group,
                     reuse=ReuseScenario(unit=unit, total_uses=_AGENTWIRE_REUSE_COUNTS),
-                ))
+                )
+                selected_uses = instance_uses if unit == "same_message_instance" else corpus_passes
+                if selected_uses != _AGENTWIRE_REUSE_COUNTS:
+                    # CLI values were strictly allowlisted above. Copy the already-validated
+                    # scenario so the runner iterates only the requested execution counts.
+                    selected_reuse = scenario.reuse.model_copy(update={"total_uses": selected_uses})
+                    scenario = scenario.model_copy(update={"reuse": selected_reuse})
+                scenarios.append(scenario)
     return tuple(scenarios)
 
 
-def _agentwire_redacted_report(report, tokenizer_names, instance_uses, corpus_passes, modes):
+def _agentwire_public_comparison(comparison):
+    return {field: comparison[field] for field in _AGENTWIRE_PUBLIC_COMPARISON_FIELDS}
+
+
+def _agentwire_public_row(row):
+    public = {field: row[field] for field in _AGENTWIRE_PUBLIC_ROW_FIELDS}
+    public["vs_natural_language_labelled"] = _agentwire_public_comparison(
+        row["vs_natural_language_labelled"],
+    )
+    public["vs_natural_language_freeform"] = _agentwire_public_comparison(
+        row["vs_natural_language_freeform"],
+    )
+    return public
+
+
+def _agentwire_redacted_report(report, tokenizer_names, modes):
     data = report.model_dump(mode="json")
+    if data.get("version") != "agentwire-benchmark-v1":
+        raise ValueError("unsupported benchmark report")
     filtered_scenarios = []
     for scenario in data["scenarios"]:
-        reuse_counts = instance_uses if scenario["reuse_unit"] == "same_message_instance" else corpus_passes
-        scenario["rows"] = [
-            row for row in scenario["rows"]
-            if (row["tokenizer_profile_id"] in tokenizer_names
-                and row["receiver_mode"] in modes
-                and row["total_uses"] in reuse_counts)
-        ]
-        filtered_scenarios.append(scenario)
+        if scenario["metadata_domain"] not in ("source", "selected_dictionary_transport"):
+            raise ValueError("unsupported benchmark metadata domain")
+        if scenario["reuse_unit"] not in ("same_message_instance", "whole_corpus_pass"):
+            raise ValueError("unsupported benchmark reuse unit")
+        rows = []
+        for row in scenario["rows"]:
+            if row["tokenizer_profile_id"] not in tokenizer_names or row["receiver_mode"] not in modes:
+                continue
+            rows.append(_agentwire_public_row(row))
+        filtered_scenarios.append({
+            "metadata_domain": scenario["metadata_domain"],
+            "reuse_unit": scenario["reuse_unit"],
+            "rows": rows,
+        })
     return {
-        "version": data["version"],
+        "version": "agentwire-benchmark-v1",
         "fixture_manifest_id": _AGENTWIRE_FIXTURE_MANIFEST_ID,
         "scenarios": filtered_scenarios,
-        "notes": data["notes"],
+        "notes": list(_AGENTWIRE_PUBLIC_NOTES),
     }
 
 
@@ -548,12 +602,14 @@ def benchmark_agentwire_cli(
         _agentwire_output_preflight(output_dir)
         cases, dictionary = _agentwire_fixed_inputs()
         profiles = _agentwire_profiles(tokenizer_names)
-        scenarios = _agentwire_scenarios(cases, dictionary, tokenizer_names)
+        scenarios = _agentwire_scenarios(
+            cases, dictionary, tokenizer_names, instance_counts, corpus_counts,
+        )
         from .agentwire.benchmark import run_agentwire_benchmark
 
         report = run_agentwire_benchmark(scenarios, profiles, dictionary=dictionary)
         public = _agentwire_redacted_report(
-            report, tokenizer_names, instance_counts, corpus_counts, selected_modes,
+            report, tokenizer_names, selected_modes,
         )
         contents = (json.dumps(public, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8")
         _agentwire_write(output_dir, contents)
