@@ -506,3 +506,16 @@ Without `--summary-output`, stdout contains only the redacted decision; payload 
 A benchmark exit 0 means all three artifacts were written, **not** clean acceptance: inspect `acceptance_passed`. Report/records use local ordinal IDs and no original messages, terms, payloads, free-text identities or content hashes; only the controlled local manifest retains necessary identities/hashes. Versions are `adaptive-benchmark-manifest-v1`, `adaptive-benchmark-record-v1`, and `adaptive-benchmark-v1`. A `clean-` scenario enters the clean gate only with non-dry, exact, legal, equal-field, zero-regret results; `negative-`, `fixed-`, `policy-` and `ablation-` cases are diagnostics, not clean success. Corpus/profile/domain/allowlist/resource/fault denominators remain separate. Same input/config/revision/profile produces deterministic bytes; even documentation commits change revision, so compare fresh runs at the **same** revision.
 
 These estimates are **not model understanding**, business success, provider performance, latency, or safety reasoning, and **not provider billing** or a general savings guarantee. Historical synthetic results remain corpus-specific, including AC1's negative cases. A content hash is not anonymization. Any real API/provider/model phase requires new permission. See [SECURITY.md](SECURITY.md) for the limits of local file and resource checks.
+
+
+## AgentWire Compact Profile v1 (opt-in, local only)
+
+`benchmark-agentwire` exercises the fixed, manually authored synthetic AgentWire fixtures. It never contacts a model or provider. Use an already-provisioned local tokenizer cache; the command does not download one:
+
+```sh
+OUT=$(mktemp -d /tmp/agentcodec-agentwire-XXXXXX)
+.venv/bin/python -m agentcodec.cli benchmark-agentwire \
+  --output-dir "$OUT" --tokenizers cl100k_base
+```
+
+This is a local format-and-cost diagnostic, not model-understanding or task-quality evidence, API billing, or a general savings guarantee. The report distinguishes two unlike natural-language comparisons: `natural_language` is a fixed **labelled-field** rendering of the canonical message, while `natural_language_freeform` is separately hand-authored **freeform** text. The freeform gateway path is pass-through and has no strict field-equality result. A token difference against the labelled-field control must not be described as savings against real natural language. Gateway rows also distinguish wire transport from the canonical message context produced after local decode; `model_direct` costs include the locally assembled context/instructions and any selected glossary. No model is called in either mode. See [AgentWire Compact Profile v1](docs/agentwire-compact-profile-v1.md) for the wire contract, stable failures, capability checks, and cost/security limits.
