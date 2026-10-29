@@ -3,6 +3,7 @@
 from agentcodec.adaptive import meter
 from agentcodec.adaptive.contracts import (
     MAX_HISTORY_EVENTS,
+    MeasuredAttempt,
     TextAttempt,
     TextComponent,
     TokenizerProfile,
@@ -91,6 +92,58 @@ def _attempts(events: tuple[CostEvent, ...]) -> tuple[TextAttempt, ...]:
     return tuple(attempts)
 
 
+def _measurement_key(attempt: TextAttempt, profile: TokenizerProfile) -> tuple:
+    return (
+        profile.encoding_name,
+        profile.library_version,
+        profile.vocabulary_sha256,
+        profile.accuracy,
+        profile.mapping_basis,
+        attempt.attempt_kind,
+        attempt.simulated,
+        tuple((part.kind, part.text, part.resource_identity) for part in attempt.components),
+    )
+
+
+def _measure_attempts_cached(
+    attempts: tuple[TextAttempt, ...],
+    profile: TokenizerProfile,
+    cache: dict[tuple, tuple[int, tuple[int, ...]]],
+) -> tuple[MeasuredAttempt, ...]:
+    if sum(attempt.multiplicity for attempt in attempts) > MAX_HISTORY_EVENTS:
+        raise _CostRejected()
+
+    keys = tuple(_measurement_key(attempt, profile) for attempt in attempts)
+    representatives: dict[tuple, TextAttempt] = {}
+    for key, attempt in zip(keys, attempts, strict=True):
+        if key not in cache:
+            representatives.setdefault(key, attempt)
+    if representatives:
+        measured = meter.measure_attempts(tuple(representatives.values()), profile)
+        if len(measured) != len(representatives):
+            raise _CostRejected()
+        for (key, attempt), result in zip(representatives.items(), measured, strict=True):
+            if (result.event_id != attempt.event_id
+                    or result.attempt_kind != attempt.attempt_kind
+                    or result.simulated is not True
+                    or result.multiplicity != attempt.multiplicity
+                    or len(result.component_tokens) != len(attempt.components)):
+                raise _CostRejected()
+            cache[key] = (result.total_tokens, result.component_tokens)
+
+    return tuple(
+        MeasuredAttempt(
+            event_id=attempt.event_id,
+            attempt_kind=attempt.attempt_kind,
+            total_tokens=cache[key][0],
+            component_tokens=cache[key][1],
+            simulated=attempt.simulated,
+            multiplicity=attempt.multiplicity,
+        )
+        for key, attempt in zip(keys, attempts, strict=True)
+    )
+
+
 def _transport_bytes(events: tuple[CostEvent, ...]) -> int:
     return sum(
         len("".join(part.text for part in event.parts).encode("utf-8"))
@@ -116,6 +169,7 @@ def _cannot_compare(events: tuple[CostEvent, ...], reason_code: str) -> CostSumm
 
 def measure_cost_events(
     events: tuple[CostEvent, ...], profile: TokenizerProfile | None,
+    *, measurement_cache: dict[tuple, tuple[int, tuple[int, ...]]] | None = None,
 ) -> CostSummary:
     """Measure unique complete events with the existing exact local text meter.
 
@@ -131,7 +185,11 @@ def measure_cost_events(
     if profile is None:
         return _cannot_compare(unique, "tokenizer_unavailable")
     try:
-        measured = meter.measure_attempts(attempts, profile)
+        measured = (
+            meter.measure_attempts(attempts, profile)
+            if measurement_cache is None
+            else _measure_attempts_cached(attempts, profile, measurement_cache)
+        )
     except meter.MeasurementUnavailable as error:
         return _cannot_compare(unique, error.reason_code)
     if len(measured) != len(unique):

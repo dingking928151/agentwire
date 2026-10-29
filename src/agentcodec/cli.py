@@ -607,7 +607,9 @@ def benchmark_agentwire_cli(
         )
         from .agentwire.benchmark import run_agentwire_benchmark
 
-        report = run_agentwire_benchmark(scenarios, profiles, dictionary=dictionary)
+        report = run_agentwire_benchmark(
+            scenarios, profiles, dictionary=dictionary, modes=selected_modes,
+        )
         public = _agentwire_redacted_report(
             report, tokenizer_names, selected_modes,
         )

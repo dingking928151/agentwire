@@ -381,6 +381,85 @@ def test_gateway_freeform_is_transport_only_and_equality_metrics_are_not_applica
     assert row.metric_surface == "transport_only"
 
 
+def test_gateway_freeform_comparison_uses_transport_delta_and_break_even(api, monkeypatch):
+    cases = (_cases(api, _fixture_records()[:1])[0].model_copy(update={
+        "freeform_text": "A manually written transport baseline. " * 100,
+    }),)
+    setup_text = "synthetic gateway protocol setup " * 1000
+    scenario = _scenario(api, cases, states={"awp1": api.ProtocolState(
+        candidate_id="awp1", profile_id=PROFILE_ID,
+        state="cold_text_setup", setup_text=setup_text,
+    )})
+    report = _run(api, (scenario,), monkeypatch)
+    domain = _domain_report(report, "source")
+    candidate = _row(domain, candidate="awp1", mode="gateway", total_uses=10)
+    baseline = _row(domain, candidate="natural_language_freeform", mode="gateway", total_uses=10)
+    candidate_one = _row(domain, candidate="awp1", mode="gateway", total_uses=1)
+    baseline_one = _row(domain, candidate="natural_language_freeform", mode="gateway", total_uses=1)
+    candidate_per_use = (candidate.transport_tokens - candidate_one.transport_tokens) // 9
+    baseline_per_use = baseline_one.transport_tokens
+    candidate_setup = candidate_one.transport_tokens - candidate_per_use
+    expected = api.calculate_break_even(candidate_setup, candidate_per_use, 0, baseline_per_use)
+
+    assert candidate.vs_natural_language_freeform.cost_delta_tokens == (
+        candidate.transport_tokens - baseline.transport_tokens
+    )
+    assert candidate.vs_natural_language_freeform.status == expected.status == "finite"
+    assert candidate.vs_natural_language_freeform.break_even_status == expected.status
+    assert candidate.vs_natural_language_freeform.first_strict_win == expected.first_strict_win
+    assert baseline.metric_surface == "transport_only"
+    assert baseline.model_input_tokens is None
+    assert baseline.synthetic_response_tokens is None
+    assert baseline.lifecycle_cost_tokens is None
+
+
+def test_gateway_freeform_comparison_fails_closed_for_unknown_transport_cost(api, monkeypatch):
+    cases = _cases(api, _fixture_records()[:1])
+    scenario = _scenario(api, cases, states={"awp1": api.ProtocolState(
+        candidate_id="awp1", profile_id=PROFILE_ID,
+        state="unknown_history", history_complete=False,
+    )})
+    report = _run(api, (scenario,), monkeypatch)
+    row = _row(_domain_report(report, "source"), candidate="awp1", mode="gateway")
+
+    assert row.metric_status == "cannot_compare"
+    assert row.transport_tokens is None
+    assert row.vs_natural_language_freeform.status == "cannot_compare"
+    assert row.vs_natural_language_freeform.cost_delta_tokens is None
+    assert row.vs_natural_language_freeform.break_even_status == "cannot_compare"
+    assert row.vs_natural_language_freeform.first_strict_win is None
+
+
+def test_benchmark_runner_only_measures_requested_receiver_modes(api, monkeypatch):
+    cases = _cases(api, _fixture_records()[:1])
+    _byte_meter(monkeypatch)
+
+    def forbidden_direct_request(*args, **kwargs):
+        pytest.fail("unselected model_direct mode performed benchmark work")
+
+    monkeypatch.setattr(api, "build_direct_model_request", forbidden_direct_request)
+    report = api.run_agentwire_benchmark(
+        (_scenario(api, cases),), {PROFILE_ID: _profile()}, modes=("gateway",),
+    )
+
+    assert report.scenarios
+    assert all(row.receiver_mode == "gateway" for scenario in report.scenarios for row in scenario.rows)
+
+
+def test_reuse_counts_do_not_retokenize_invariant_event_text(api, monkeypatch):
+    observed = _byte_meter(monkeypatch)
+    cases = _cases(api, _fixture_records()[:1])
+    api.run_agentwire_benchmark((_scenario(api, cases),), {PROFILE_ID: _profile()}, modes=("gateway",))
+
+    signatures = [
+        (profile.encoding_name, attempt.attempt_kind,
+         tuple((component.kind, component.text, component.resource_identity)
+               for component in attempt.components))
+        for attempt, profile in observed
+    ]
+    assert len(signatures) == len(set(signatures))
+
+
 def test_direct_mode_counts_common_prompt_context_and_response_fixture_for_freeform(api, monkeypatch):
     import agentcodec.agentwire.benchmark as benchmark_module
 

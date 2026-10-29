@@ -136,9 +136,9 @@ def _stub_runner(monkeypatch, captured=None, inject_private=False):
                         row["vs_natural_language_labelled"]["payload"] = "RAW-NESTED-PAYLOAD"
             return data
 
-    def run(scenarios, profiles, dictionary=None):
+    def run(scenarios, profiles, dictionary=None, modes=("model_direct", "gateway")):
         if captured is not None:
-            captured.append((scenarios, profiles, dictionary))
+            captured.append((scenarios, profiles, dictionary, modes))
         selected_by_unit = {}
         for scenario in scenarios:
             selected_by_unit.setdefault(scenario.reuse.unit, set()).update(
@@ -148,7 +148,8 @@ def _stub_runner(monkeypatch, captured=None, inject_private=False):
         for scenario_report in data["scenarios"]:
             selected = selected_by_unit[scenario_report["reuse_unit"]]
             scenario_report["rows"] = [
-                row for row in scenario_report["rows"] if row["total_uses"] in selected
+                row for row in scenario_report["rows"]
+                if row["total_uses"] in selected and row["receiver_mode"] in modes
             ]
         return Report(data)
 
@@ -320,7 +321,7 @@ def test_reuse_options_remain_separate(app, tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert len(captured) == 1
-    scenarios, profiles, _ = captured[0]
+    scenarios, profiles, _, modes = captured[0]
     assert set(profiles) == {"cl100k_base"}
     assert {scenario.reuse.unit for scenario in scenarios} == {
         "same_message_instance", "whole_corpus_pass",
@@ -328,6 +329,7 @@ def test_reuse_options_remain_separate(app, tmp_path, monkeypatch):
     for scenario in scenarios:
         wanted = (10,) if scenario.reuse.unit == "same_message_instance" else (50,)
         assert scenario.reuse.total_uses == wanted
+    assert modes == ("gateway",)
     report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
     for scenario in report["scenarios"]:
         wanted = {10} if scenario["reuse_unit"] == "same_message_instance" else {50}
@@ -343,9 +345,10 @@ def test_reuse_defaults_pass_full_ranges_to_runner(app, tmp_path, monkeypatch):
     result = invoke(app, ["--output-dir", str(output_dir)])
 
     assert result.exit_code == 0, result.output
-    scenarios, _, _ = captured[0]
+    scenarios, _, _, _ = captured[0]
     assert scenarios
     assert all(scenario.reuse.total_uses == (1, 10, 50) for scenario in scenarios)
+    assert captured[0][3] == ("gateway", "model_direct")
 
 
 @pytest.mark.parametrize("args", [
