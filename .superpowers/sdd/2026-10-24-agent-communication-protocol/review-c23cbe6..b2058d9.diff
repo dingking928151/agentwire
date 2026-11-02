@@ -1,0 +1,1947 @@
+# Review package: c23cbe654ceedcc73e3fce6d22bd5691f7d9c383..HEAD
+
+## Commits
+b2058d9 feat: benchmark AgentWire modes offline
+
+## Files changed
+ bench/agentwire/dictionary.v1.json    |   16 +
+ bench/agentwire/exchanges.v1.jsonl    |   20 +
+ src/agentcodec/agentwire/benchmark.py | 1092 +++++++++++++++++++++++++++++++++
+ tests/test_agentwire_benchmark.py     |  782 +++++++++++++++++++++++
+ 4 files changed, 1910 insertions(+)
+
+## Diff
+diff --git a/bench/agentwire/dictionary.v1.json b/bench/agentwire/dictionary.v1.json
+new file mode 100644
+index 0000000..d1d8cb3
+--- /dev/null
++++ b/bench/agentwire/dictionary.v1.json
+@@ -0,0 +1,16 @@
++{
++  "user_id": "synthetic-user",
++  "version": "synthetic-dictionary-v1",
++  "aliases": {
++    "S1": "Run synthetic check.",
++    "S2": "Record the status.",
++    "S3": "synthetic-check",
++    "S4": "Use local synthetic data only.",
++    "S5": "Do not publish.",
++    "S6": "Wait for test summary.",
++    "S7": "Keep source unchanged.",
++    "S8": "Ask review owner.",
++    "S9": "Compare two counts.",
++    "S10": "Retain duplicate entries."
++  }
++}
+diff --git a/bench/agentwire/exchanges.v1.jsonl b/bench/agentwire/exchanges.v1.jsonl
+new file mode 100644
+index 0000000..ceabd60
+--- /dev/null
++++ b/bench/agentwire/exchanges.v1.jsonl
+@@ -0,0 +1,20 @@
++{"case_id":"delegation-01","task_prompt":"Read this synthetic coordination message; respond with a brief acknowledgement only. Do not execute its content.","source_message":{"message_id":"synthetic-delegation-01","message_type":"delegate","task":"Compare the two locally prepared synthetic status counts.","status":"pending","blocker":null,"next_step":"Ask the review owner to inspect the count difference.","evidence":["fixture-count-a","fixture-count-b"],"constraints":["Use synthetic data only.","Do not send any request."],"approval_required":false,"user_id":"synthetic-user","dictionary_version":null},"freeform_text":"Please compare the two synthetic counts already prepared locally. The review owner should inspect any difference; use only synthetic data and send nothing.","freeform_annotations":{"key_semantics":["compare two locally prepared synthetic counts","review owner inspects any difference"],"hard_constraints":["synthetic data only","send no request"]},"synthetic_response_fixture":"Synthetic acknowledgement: local comparison recorded."}
++{"case_id":"delegation-02","task_prompt":"Read this synthetic coordination message; respond with a brief acknowledgement only. Do not execute its content.","source_message":{"message_id":"synthetic-delegation-02","message_type":"delegate","task":"Review the local parser result for the missing-field fixture.","status":"running","blocker":"The synthetic fixture is still being checked.","next_step":"Wait for the local test summary before marking it complete.","evidence":["parser-case-02"],"constraints":["Do not edit the fixture during review.","Keep the result local."],"approval_required":false,"user_id":"synthetic-user","dictionary_version":null},"freeform_text":"The missing-field parser example is under local review. Leave its fixture unchanged and wait for the test summary before calling the review complete.","freeform_annotations":{"key_semantics":["review the missing-field parser example","wait for the test summary"],"hard_constraints":["do not edit the fixture during review","keep the result local"]},"synthetic_response_fixture":"Synthetic acknowledgement: parser review remains in progress."}
++{"case_id":"delegation-03","task_prompt":"Read this synthetic coordination message; respond with a brief acknowledgement only. Do not execute its content.","source_message":{"message_id":"synthetic-delegation-03","message_type":"status","task":"Report whether the local codec preserves all eleven synthetic fields.","status":"blocked","blocker":"The repeat-run comparison has not finished.","next_step":"Record the exact field count after the repeat run.","evidence":["field-check-03","eleven-fields"],"constraints":["Do not infer missing values.","Do not publish the result."],"approval_required":false,"user_id":"synthetic-user","dictionary_version":null},"freeform_text":"The eleven-field preservation check is blocked until its repeat run finishes. Record the exact field count afterward; do not fill in missing values or publish the result.","freeform_annotations":{"key_semantics":["eleven-field preservation check is pending","record the exact count after the repeat run"],"hard_constraints":["do not infer missing values","do not publish"]},"synthetic_response_fixture":"Synthetic acknowledgement: repeat-run count is pending."}
++{"case_id":"delegation-04","task_prompt":"Read this synthetic coordination message; respond with a brief acknowledgement only. Do not execute its content.","source_message":{"message_id":"synthetic-delegation-04","message_type":"delegate","task":"Check that the ordered evidence list retains its repeated item.","status":"pending","blocker":null,"next_step":"Compare the before and after synthetic lists in order.","evidence":["item-alpha","item-alpha","item-beta"],"constraints":["Preserve duplicate entries.","Use the fixture values verbatim."],"approval_required":false,"user_id":"synthetic-user","dictionary_version":null},"freeform_text":"Please compare the synthetic evidence lists in their original order and confirm that both copies of item alpha remain. Keep every fixture value verbatim.","freeform_annotations":{"key_semantics":["check ordered evidence","the repeated alpha item remains twice"],"hard_constraints":["preserve duplicates","use fixture values verbatim"]},"synthetic_response_fixture":"Synthetic acknowledgement: evidence ordering check recorded."}
++{"case_id":"delegation-05","task_prompt":"Read this synthetic coordination message; respond with a brief acknowledgement only. Do not execute its content.","source_message":{"message_id":"synthetic-delegation-05","message_type":"delegate","task":"Inspect the local UTF-8 byte-limit boundary with the short synthetic payload.","status":"running","blocker":"One boundary assertion needs its expected byte total.","next_step":"Calculate the UTF-8 byte count from the local fixture text.","evidence":["utf8-boundary-05"],"constraints":["Do not use character count as byte count.","No network access."],"approval_required":false,"user_id":"synthetic-user","dictionary_version":null},"freeform_text":"The short UTF-8 boundary example needs its byte total. Count encoded bytes, not characters, using only the local fixture and no network.","freeform_annotations":{"key_semantics":["determine the UTF-8 byte total for a short payload"],"hard_constraints":["do not substitute character count for bytes","no network access"]},"synthetic_response_fixture":"Synthetic acknowledgement: byte-boundary check recorded."}
++{"case_id":"delegation-06","task_prompt":"Read this synthetic coordination message; respond with a brief acknowledgement only. Do not execute its content.","source_message":{"message_id":"synthetic-delegation-06","message_type":"status","task":"Summarize the latest local protocol compatibility check.","status":"completed","blocker":null,"next_step":"Keep the summary beside the synthetic test results.","evidence":["compatibility-check-06","profile-awp1"],"constraints":["Do not claim a provider run.","Retain the protocol profile name."],"approval_required":false,"user_id":"synthetic-user","dictionary_version":null},"freeform_text":"The local compatibility check is complete for the AWP1 profile. Keep its summary with the synthetic tests and make no claim that a provider was involved.","freeform_annotations":{"key_semantics":["local compatibility check completed","profile is AWP1"],"hard_constraints":["do not claim a provider run","retain the profile name"]},"synthetic_response_fixture":"Synthetic acknowledgement: local compatibility summary retained."}
++{"case_id":"delegation-07","task_prompt":"Read this synthetic coordination message; respond with a brief acknowledgement only. Do not execute its content.","source_message":{"message_id":"synthetic-delegation-07","message_type":"delegate","task":"Compare the compact and labelled encodings for the same synthetic message.","status":"pending","blocker":null,"next_step":"Use one shared source instance for both encoders.","evidence":["comparison-case-07"],"constraints":["Do not change metadata between encoders.","Report both byte totals."],"approval_required":false,"user_id":"synthetic-user","dictionary_version":null},"freeform_text":"Compare the compact and labelled forms using one unchanged synthetic message. Keep its metadata fixed and report each encoded byte total separately.","freeform_annotations":{"key_semantics":["compare compact and labelled encodings","use the same source message instance"],"hard_constraints":["do not change metadata","report both byte totals"]},"synthetic_response_fixture":"Synthetic acknowledgement: paired encoding comparison queued."}
++{"case_id":"delegation-08","task_prompt":"Read this synthetic coordination message; respond with a brief acknowledgement only. Do not execute its content.","source_message":{"message_id":"synthetic-delegation-08","message_type":"status","task":"Track the synthetic retry event without dropping the failed first attempt.","status":"blocked","blocker":"The first local attempt is recorded as failed.","next_step":"Include the first attempt and retry in the cost ledger.","evidence":["attempt-1-failed","retry-2-pending"],"constraints":["Preserve every attempt.","Do not call a real fallback."],"approval_required":false,"user_id":"synthetic-user","dictionary_version":null},"freeform_text":"The first local attempt failed and a retry is pending. Keep both attempts in the ledger, and do not invoke any real fallback.","freeform_annotations":{"key_semantics":["first attempt failed","retry is pending","both attempts belong in the ledger"],"hard_constraints":["preserve every attempt","no real fallback"]},"synthetic_response_fixture":"Synthetic acknowledgement: retry ledger remains complete."}
++{"case_id":"delegation-09","task_prompt":"Read this synthetic coordination message; respond with a brief acknowledgement only. Do not execute its content.","source_message":{"message_id":"synthetic-delegation-09","message_type":"delegate","task":"Verify that the selected synthetic dictionary version matches the transport copy.","status":"pending","blocker":null,"next_step":"Compare the explicit version strings before encoding.","evidence":["dictionary-case-09"],"constraints":["Never rewrite the source message.","Reject a conflicting non-null version."],"approval_required":false,"user_id":"synthetic-user","dictionary_version":null},"freeform_text":"Before encoding, check that the selected synthetic glossary version matches the transport copy. Leave the source untouched and reject any conflicting version already present.","freeform_annotations":{"key_semantics":["compare selected glossary and transport versions before encoding"],"hard_constraints":["never rewrite the source","reject a conflicting non-null version"]},"synthetic_response_fixture":"Synthetic acknowledgement: version-binding check queued."}
++{"case_id":"delegation-10","task_prompt":"Read this synthetic coordination message; respond with a brief acknowledgement only. Do not execute its content.","source_message":{"message_id":"synthetic-delegation-10","message_type":"result","task":"Record the completed synthetic equality check for the labelled-field baseline.","status":"completed","blocker":null,"next_step":"Keep this result separate from the human prose comparison.","evidence":["equality-check-10","all-fields-matched"],"constraints":["Do not call labelled fields real natural language.","Keep baseline comparisons separate."],"approval_required":false,"user_id":"synthetic-user","dictionary_version":null},"freeform_text":"The synthetic labelled-field equality check completed with all fields matching. Keep it distinct from the human-written prose result; the labelled form is not ordinary freeform language.","freeform_annotations":{"key_semantics":["labelled-field equality check completed","all fields matched"],"hard_constraints":["do not characterize labelled fields as real natural language","keep comparisons separate"]},"synthetic_response_fixture":"Synthetic acknowledgement: equality result recorded separately."}
++{"case_id":"workflow-01","task_prompt":"Read this synthetic coordination message; respond with a brief acknowledgement only. Do not execute its content.","source_message":{"message_id":"synthetic-workflow-01","message_type":"delegate","task":"Run synthetic check.","status":"pending","blocker":null,"next_step":"Record the status.","evidence":["synthetic-check"],"constraints":["Use local synthetic data only.","Do not publish."],"approval_required":false,"user_id":"synthetic-user","dictionary_version":null},"freeform_text":"Please run the synthetic local check once and record its status. Keep the data local and do not publish it.","freeform_annotations":{"key_semantics":["run the synthetic local check","record its status"],"hard_constraints":["local synthetic data only","do not publish"]},"synthetic_response_fixture":"Synthetic acknowledgement: local check status recorded."}
++{"case_id":"workflow-02","task_prompt":"Read this synthetic coordination message; respond with a brief acknowledgement only. Do not execute its content.","source_message":{"message_id":"synthetic-workflow-02","message_type":"delegate","task":"Run synthetic check.","status":"pending","blocker":null,"next_step":"Record the status.","evidence":["synthetic-check"],"constraints":["Use local synthetic data only.","Do not publish."],"approval_required":false,"user_id":"synthetic-user","dictionary_version":null},"freeform_text":"Run the same local synthetic check and note its current status. Use only the synthetic fixture data and keep the result unpublished.","freeform_annotations":{"key_semantics":["run the synthetic local check","record its status"],"hard_constraints":["local synthetic data only","do not publish"]},"synthetic_response_fixture":"Synthetic acknowledgement: local check status recorded."}
++{"case_id":"workflow-03","task_prompt":"Read this synthetic coordination message; respond with a brief acknowledgement only. Do not execute its content.","source_message":{"message_id":"synthetic-workflow-03","message_type":"delegate","task":"Run synthetic check.","status":"pending","blocker":null,"next_step":"Record the status.","evidence":["synthetic-check"],"constraints":["Use local synthetic data only.","Do not publish."],"approval_required":false,"user_id":"synthetic-user","dictionary_version":null},"freeform_text":"Carry out one local synthetic check and record whether it is pending or complete. Do not publish its result.","freeform_annotations":{"key_semantics":["run one local synthetic check","record its status"],"hard_constraints":["local synthetic data only","do not publish"]},"synthetic_response_fixture":"Synthetic acknowledgement: local check status recorded."}
++{"case_id":"workflow-04","task_prompt":"Read this synthetic coordination message; respond with a brief acknowledgement only. Do not execute its content.","source_message":{"message_id":"synthetic-workflow-04","message_type":"delegate","task":"Run synthetic check.","status":"pending","blocker":null,"next_step":"Record the status.","evidence":["synthetic-check"],"constraints":["Use local synthetic data only.","Do not publish."],"approval_required":false,"user_id":"synthetic-user","dictionary_version":null},"freeform_text":"Please complete a single synthetic check locally and save the status for the report. Keep all material private to this local benchmark.","freeform_annotations":{"key_semantics":["complete one local synthetic check","save the resulting status"],"hard_constraints":["local synthetic data only","do not publish"]},"synthetic_response_fixture":"Synthetic acknowledgement: local check status recorded."}
++{"case_id":"workflow-05","task_prompt":"Read this synthetic coordination message; respond with a brief acknowledgement only. Do not execute its content.","source_message":{"message_id":"synthetic-workflow-05","message_type":"delegate","task":"Run synthetic check.","status":"pending","blocker":null,"next_step":"Record the status.","evidence":["synthetic-check"],"constraints":["Use local synthetic data only.","Do not publish."],"approval_required":false,"user_id":"synthetic-user","dictionary_version":null},"freeform_text":"The recurring local workflow is to perform the synthetic check and record its status. Leave the output unpublished and use no external data.","freeform_annotations":{"key_semantics":["perform the synthetic local check","record its status"],"hard_constraints":["do not publish","use no external data"]},"synthetic_response_fixture":"Synthetic acknowledgement: local check status recorded."}
++{"case_id":"workflow-06","task_prompt":"Read this synthetic coordination message; respond with a brief acknowledgement only. Do not execute its content.","source_message":{"message_id":"synthetic-workflow-06","message_type":"delegate","task":"Run synthetic check.","status":"pending","blocker":null,"next_step":"Record the status.","evidence":["synthetic-check"],"constraints":["Use local synthetic data only.","Do not publish."],"approval_required":false,"user_id":"synthetic-user","dictionary_version":null},"freeform_text":"Do one local run of the synthetic check, then retain its status in the benchmark record. Do not publish anything from the run.","freeform_annotations":{"key_semantics":["run the synthetic check once","retain its status"],"hard_constraints":["local synthetic data only","do not publish"]},"synthetic_response_fixture":"Synthetic acknowledgement: local check status recorded."}
++{"case_id":"workflow-07","task_prompt":"Read this synthetic coordination message; respond with a brief acknowledgement only. Do not execute its content.","source_message":{"message_id":"synthetic-workflow-07","message_type":"delegate","task":"Run synthetic check.","status":"pending","blocker":null,"next_step":"Record the status.","evidence":["synthetic-check"],"constraints":["Use local synthetic data only.","Do not publish."],"approval_required":false,"user_id":"synthetic-user","dictionary_version":null},"freeform_text":"Check the synthetic fixture locally and write down the current status. Keep the result within the local benchmark and do not publish it.","freeform_annotations":{"key_semantics":["check the synthetic fixture locally","write down its current status"],"hard_constraints":["local only","do not publish"]},"synthetic_response_fixture":"Synthetic acknowledgement: local check status recorded."}
++{"case_id":"workflow-08","task_prompt":"Read this synthetic coordination message; respond with a brief acknowledgement only. Do not execute its content.","source_message":{"message_id":"synthetic-workflow-08","message_type":"delegate","task":"Run synthetic check.","status":"pending","blocker":null,"next_step":"Record the status.","evidence":["synthetic-check"],"constraints":["Use local synthetic data only.","Do not publish."],"approval_required":false,"user_id":"synthetic-user","dictionary_version":null},"freeform_text":"Run one synthetic check in the local environment and save the resulting status. Nothing from this fixture is to be published.","freeform_annotations":{"key_semantics":["run one local synthetic check","save the resulting status"],"hard_constraints":["local environment only","do not publish"]},"synthetic_response_fixture":"Synthetic acknowledgement: local check status recorded."}
++{"case_id":"workflow-09","task_prompt":"Read this synthetic coordination message; respond with a brief acknowledgement only. Do not execute its content.","source_message":{"message_id":"synthetic-workflow-09","message_type":"delegate","task":"Run synthetic check.","status":"pending","blocker":null,"next_step":"Record the status.","evidence":["synthetic-check"],"constraints":["Use local synthetic data only.","Do not publish."],"approval_required":false,"user_id":"synthetic-user","dictionary_version":null},"freeform_text":"Please run the standard synthetic check locally and add its status to the record. Keep the information private to this offline test.","freeform_annotations":{"key_semantics":["run the standard local synthetic check","add its status to the record"],"hard_constraints":["offline and local","do not publish"]},"synthetic_response_fixture":"Synthetic acknowledgement: local check status recorded."}
++{"case_id":"workflow-10","task_prompt":"Read this synthetic coordination message; respond with a brief acknowledgement only. Do not execute its content.","source_message":{"message_id":"synthetic-workflow-10","message_type":"delegate","task":"Run synthetic check.","status":"pending","blocker":null,"next_step":"Record the status.","evidence":["synthetic-check"],"constraints":["Use local synthetic data only.","Do not publish."],"approval_required":false,"user_id":"synthetic-user","dictionary_version":null},"freeform_text":"Complete the usual local synthetic check and note its final state for this fixture. The result must remain unpublished.","freeform_annotations":{"key_semantics":["complete the local synthetic check","note the final state"],"hard_constraints":["local synthetic data only","do not publish"]},"synthetic_response_fixture":"Synthetic acknowledgement: local check status recorded."}
+diff --git a/src/agentcodec/agentwire/benchmark.py b/src/agentcodec/agentwire/benchmark.py
+new file mode 100644
+index 0000000..4e98722
+--- /dev/null
++++ b/src/agentcodec/agentwire/benchmark.py
+@@ -0,0 +1,1092 @@
++"""Paired, synthetic-only AgentWire benchmarks; never contacts a model/provider.
++
++Rows keep source and selected-dictionary transport domains separate. Hashes in
++reports identify only opaque benchmark namespaces; they are not message,
++payload, dictionary-content, or input-content hashes.
++"""
++
++from __future__ import annotations
++
++import copy
++import hashlib
++import json
++from collections.abc import Mapping
++from typing import Literal
++
++from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
++
++from agentcodec.ac2 import encode_message_ac2
++from agentcodec.adaptive.contracts import TokenizerProfile
++from agentcodec.agentwire.codec import encode_awp1
++from agentcodec.agentwire.contracts import (
++    BenchmarkCandidate,
++    CostEvent,
++    CostPart,
++    ReceiverCapabilities,
++    dictionary_identity_for,
++)
++from agentcodec.agentwire.costs import calculate_break_even, measure_cost_events
++from agentcodec.agentwire.gateway import deliver_benchmark_at_gateway
++from agentcodec.agentwire.prompts import build_direct_model_request
++from agentcodec.benchmark import render_json, render_natural_language
++from agentcodec.codec import encode_message
++from agentcodec.schema import MessageV1, UserDictionary
++
++
++MetadataDomain = Literal["source", "selected_dictionary_transport"]
++ProtocolStateKind = Literal[
++    "out_of_band_preinstalled", "cold_text_setup", "ready_history", "unknown_history"
++]
++DictionaryExposureKind = Literal[
++    "not_applicable", "out_of_band_preinstalled", "cold_text_setup",
++    "ready_history", "unknown_history",
++]
++ReuseUnit = Literal["same_message_instance", "whole_corpus_pass"]
++ReceiverMode = Literal["model_direct", "gateway"]
++MetricStatus = Literal["exact_local_text", "cannot_compare", "not_applicable", "transport_only"]
++
++
++class _FrozenModel(BaseModel):
++    model_config = ConfigDict(strict=True, frozen=True, extra="forbid", hide_input_in_errors=True)
++
++
++class BenchmarkCase(_FrozenModel):
++    case_id: str = Field(min_length=1)
++    task_prompt: str
++    source_message: MessageV1
++    freeform_text: str
++    freeform_annotations: dict[str, tuple[str, ...]]
++    synthetic_response_fixture: str
++
++    @field_validator("source_message", mode="before")
++    @classmethod
++    def snapshot_message(cls, value):
++        if isinstance(value, MessageV1):
++            value = copy.deepcopy(value.model_dump(mode="python"))
++        return MessageV1.model_validate(value, strict=True)
++
++    @field_validator("freeform_annotations", mode="before")
++    @classmethod
++    def snapshot_annotations(cls, value):
++        if not isinstance(value, dict):
++            raise ValueError("benchmark case rejected")
++        try:
++            return {key: tuple(items) for key, items in value.items()}
++        except (TypeError, ValueError):
++            raise ValueError("benchmark case rejected") from None
++
++    @model_validator(mode="after")
++    def require_paired_handwritten_freeform(self):
++        if (
++            not self.case_id
++            or not self.task_prompt
++            or not self.freeform_text
++            or not self.synthetic_response_fixture
++            or not self.freeform_annotations.get("key_semantics")
++            or not self.freeform_annotations.get("hard_constraints")
++        ):
++            raise ValueError("benchmark case rejected")
++        return self
++
++
++class ProtocolState(_FrozenModel):
++    candidate_id: BenchmarkCandidate
++    profile_id: str = Field(min_length=1)
++    state: ProtocolStateKind
++    setup_text: str | None = None
++    history: tuple[CostEvent, ...] = ()
++    history_complete: bool = True
++    negotiation_required: bool = False
++    negotiation_text: str | None = None
++
++    @model_validator(mode="after")
++    def consistent_state(self):
++        if self.state == "unknown_history" and self.history_complete:
++            raise ValueError("unknown protocol history must be incomplete")
++        if self.state == "ready_history" and not self.history_complete:
++            raise ValueError("ready protocol history must be complete")
++        if self.state == "out_of_band_preinstalled" and self.setup_text is not None:
++            raise ValueError("preinstalled protocol cannot have transmitted setup text")
++        if self.negotiation_text is not None and not self.negotiation_text:
++            raise ValueError("empty negotiation text is not evidence of transmission")
++        event_ids = [event.event_id for event in self.history]
++        if len(event_ids) != len(set(event_ids)):
++            raise ValueError("protocol history event IDs must be unique")
++        return self
++
++
++class DictionaryExposure(_FrozenModel):
++    state: DictionaryExposureKind
++    setup_text: str | None = None
++    history_complete: bool = True
++
++    @model_validator(mode="after")
++    def consistent_exposure(self):
++        if self.state == "unknown_history" and self.history_complete:
++            raise ValueError("unknown dictionary history must be incomplete")
++        if self.state == "ready_history" and not self.history_complete:
++            raise ValueError("ready dictionary history must be complete")
++        if self.state in {"not_applicable", "out_of_band_preinstalled", "ready_history"} and self.setup_text is not None:
++            raise ValueError("selected dictionary exposure state conflicts with setup text")
++        return self
++
++
++class ReuseScenario(_FrozenModel):
++    # Keep an unknown unit representable so a report can say cannot_compare,
++    # rather than silently treating it as one of the two supported units.
++    unit: str = Field(min_length=1)
++    total_uses: tuple[int, ...] = (1, 10, 50)
++
++    @field_validator("total_uses")
++    @classmethod
++    def fixed_use_counts(cls, value):
++        if value != (1, 10, 50):
++            raise ValueError("benchmark reuse counts must be 1, 10, and 50")
++        return value
++
++
++class BenchmarkScenario(_FrozenModel):
++    scenario_id: str = Field(min_length=1)
++    scope_id: str = Field(min_length=1)
++    corpus_id: str = Field(min_length=1)
++    metadata_domain: MetadataDomain
++    receiver_capabilities: ReceiverCapabilities
++    protocol_states: tuple[ProtocolState, ...]
++    dictionary_candidate_exposure: DictionaryExposure
++    dictionary_history: tuple[CostEvent, ...]
++    cases: tuple[BenchmarkCase, ...] = Field(min_length=1)
++    reuse: ReuseScenario
++
++    @model_validator(mode="after")
++    def enforce_one_scope_and_reuse_unit(self):
++        receiver = self.receiver_capabilities
++        if any(case.source_message.user_id != receiver.user_id for case in self.cases):
++            raise ValueError("benchmark scenario rejected")
++        if self.metadata_domain == "source":
++            if (
++                self.dictionary_candidate_exposure.state != "not_applicable"
++                or self.dictionary_history
++            ):
++                raise ValueError("source domain cannot select dictionary exposure or history")
++        elif self.dictionary_candidate_exposure.state == "not_applicable":
++            raise ValueError("selected transport requires explicit dictionary exposure")
++        if self.reuse.unit == "same_message_instance" and len(self.cases) != 1:
++            raise ValueError("same_message_instance requires exactly one case")
++        case_ids = [case.case_id for case in self.cases]
++        if len(case_ids) != len(set(case_ids)):
++            raise ValueError("benchmark case IDs must be unique within a corpus")
++        state_keys = [(state.candidate_id, state.profile_id) for state in self.protocol_states]
++        if len(state_keys) != len(set(state_keys)):
++            raise ValueError("protocol state must be unique per candidate and profile")
++        history_ids = [event.event_id for event in self.dictionary_history]
++        if len(history_ids) != len(set(history_ids)):
++            raise ValueError("dictionary history event IDs must be unique")
++        return self
++
++
++class BenchmarkComparison(_FrozenModel):
++    status: Literal["finite", "never", "cannot_compare", "not_applicable"]
++    cost_delta_tokens: int | None
++    break_even_status: Literal["finite", "never", "cannot_compare", "not_applicable"]
++    first_strict_win: int | None
++
++
++class BenchmarkRow(_FrozenModel):
++    # Stable, privacy-safe row order. Namespace hashes are not content hashes.
++    synthetic_corpus_ordinal: int
++    tokenizer_profile_id: str
++    receiver_mode: ReceiverMode
++    candidate_id: BenchmarkCandidate
++    metric_surface: Literal["end_to_end", "transport_and_model", "transport_only", "not_applicable"]
++    metric_status: MetricStatus
++    dictionary_condition: Literal["none", "selected", "not_applicable"]
++    dictionary_candidate_exposure: DictionaryExposureKind
++    reuse_unit: str
++    total_uses: int
++    case_count: int
++    event_count: int | None
++    source_hash: str
++    transport_hash: str
++    transport_bytes: int | None
++    transport_tokens: int | None
++    model_input_tokens: int | None
++    synthetic_response_tokens: int | None
++    distinct_text_event_tokens: int | None
++    candidate_protocol_exposure_tokens: int | None
++    candidate_protocol_setup_history_tokens: int | None
++    candidate_protocol_setup_tokens: int | None
++    negotiation_tokens: int | None
++    dictionary_exposure_tokens: int | None
++    dictionary_history_tokens: int | None
++    dictionary_setup_tokens: int | None
++    request_tokens: int | None
++    response_tokens: int | None
++    retry_tokens: int | None
++    fallback_tokens: int | None
++    per_use_cost_tokens: int | None
++    amortized_cost_tokens: float | None
++    lifecycle_cost_tokens: int | None
++    strict_decode_status: Literal["decoded", "fallback_required", "not_applicable"]
++    strict_decode_success_count: int | None
++    full_field_equal_count: int | None
++    hard_field_equal_count: int | None
++    vs_natural_language_labelled: BenchmarkComparison
++    vs_natural_language_freeform: BenchmarkComparison
++    labelled_baseline_description: str = "labelled-field control only"
++
++
++class ScenarioReport(_FrozenModel):
++    metadata_domain: MetadataDomain
++    reuse_unit: str
++    source_hash: str
++    transport_hash: str
++    hash_basis: str = "opaque namespace identifiers only; not message or payload content"
++    rows: tuple[BenchmarkRow, ...]
++
++
++class AgentWireBenchmarkReport(_FrozenModel):
++    version: Literal["agentwire-benchmark-v1"] = "agentwire-benchmark-v1"
++    scenarios: tuple[ScenarioReport, ...]
++    notes: tuple[str, ...] = (
++        "Tokenizer counts are local text estimates, not provider billing.",
++        "No model or provider was contacted; response text is synthetic fixture data.",
++        "Decoder equality is structural only and does not measure model understanding or task quality.",
++    )
++
++
++_CANDIDATE_ORDER: tuple[BenchmarkCandidate, ...] = (
++    "natural_language", "natural_language_freeform", "json", "ac1", "ac1_dictionary",
++    "ac2", "ac2_dictionary", "awp1", "awp1_dictionary",
++)
++_SOURCE_ALLOWLIST = frozenset({
++    "natural_language", "natural_language_freeform", "json", "ac1", "ac2", "awp1",
++})
++_SELECTED_ALLOWLIST = frozenset({
++    "natural_language", "json", "awp1", "ac1_dictionary", "ac2_dictionary",
++    "awp1_dictionary",
++})
++_DICTIONARY_CANDIDATES = frozenset({"ac1_dictionary", "ac2_dictionary", "awp1_dictionary"})
++_HARD_FIELDS = ("task", "blocker", "next_step", "evidence", "constraints", "approval_required")
++_SUPPORTED_REUSE_UNITS = frozenset({"same_message_instance", "whole_corpus_pass"})
++
++
++def prepare_transport_message(message: MessageV1, dictionary: UserDictionary) -> MessageV1:
++    """Return an immutable-by-convention transport copy with selected version metadata.
++
++    The source is snapshotted and never mutated. The only permitted field change is
++    setting a null dictionary_version to the explicitly selected dictionary version.
++    """
++    try:
++        if not isinstance(message, MessageV1) or not isinstance(dictionary, UserDictionary):
++            raise ValueError
++        source = MessageV1.model_validate(
++            copy.deepcopy(message.model_dump(mode="python")), strict=True
++        )
++        selected = UserDictionary.model_validate(
++            copy.deepcopy(dictionary.model_dump(mode="python")), strict=True
++        )
++        identity = dictionary_identity_for(selected)
++        if source.user_id != identity.user_id:
++            raise ValueError
++        if source.dictionary_version not in (None, identity.version):
++            raise ValueError
++        values = source.model_dump(mode="python")
++        values["dictionary_version"] = identity.version
++        return MessageV1.model_validate(values, strict=True)
++    except (TypeError, ValueError, AttributeError, RecursionError):
++        raise ValueError("transport message rejected") from None
++
++
++def _domain_hash(kind: str, scenario: BenchmarkScenario, profile_id: str, dictionary: UserDictionary | None) -> str:
++    selected_identity = None
++    if dictionary is not None:
++        try:
++            selected_identity = dictionary_identity_for(dictionary).sha256
++        except (TypeError, ValueError, AttributeError, RecursionError):
++            selected_identity = "invalid"
++    # Only namespace identifiers are hashed. No MessageV1, prose, payload, or
++    # dictionary content enters this digest.
++    namespace = json.dumps(
++        {
++            "kind": kind,
++            "scenario": scenario.scenario_id,
++            "scope": scenario.scope_id,
++            "corpus": scenario.corpus_id,
++            "receiver": scenario.receiver_capabilities.user_id,
++            "profile": profile_id,
++            "dictionary_identity": selected_identity,
++        },
++        sort_keys=True,
++        separators=(",", ":"),
++    ).encode("utf-8")
++    return hashlib.sha256(b"agentwire-benchmark-namespace-v1\0" + namespace).hexdigest()
++
++
++def _new_event(
++    event_id: str,
++    kind: str,
++    label: str,
++    text: str,
++    *,
++    surfaces: tuple[str, ...] = ("transport",),
++    multiplicity: int = 1,
++) -> CostEvent:
++    return CostEvent(
++        event_id=event_id,
++        kind=kind,
++        surfaces=surfaces,
++        parts=(CostPart(label=label, text=text),),
++        multiplicity=multiplicity,
++    )
++
++
++def _copy_history_event(event: CostEvent, event_id: str) -> CostEvent:
++    return CostEvent(
++        event_id=event_id,
++        kind=event.kind,
++        simulated=True,
++        surfaces=event.surfaces,
++        parts=event.parts,
++        multiplicity=event.multiplicity,
++    )
++
++
++def _direct_request_parts(
++    complete_request: str,
++    context_prefix: str,
++    wire_payload: str,
++) -> tuple[CostPart, ...]:
++    marker = "\n\nPayload:\n"
++    boundary = complete_request.find(marker, len(context_prefix))
++    if boundary < 0 or not complete_request.startswith(context_prefix):
++        raise ValueError("direct request cannot be attributed")
++    payload_start = boundary + len(marker)
++    payload_end = payload_start + len(wire_payload)
++    if complete_request[payload_start:payload_end] != wire_payload:
++        raise ValueError("direct request cannot be attributed")
++    header_tail = complete_request[len(context_prefix):boundary]
++    dictionary_tail = complete_request[payload_end:]
++    parts = [CostPart(label="context", text=context_prefix)]
++    if header_tail:
++        parts.append(CostPart(label="protocol_instructions", text=header_tail))
++    parts.append(CostPart(label="payload", text=marker + wire_payload))
++    if dictionary_tail:
++        parts.append(CostPart(label="dictionary_glossary", text=dictionary_tail))
++    if "".join(part.text for part in parts) != complete_request:
++        raise ValueError("direct request cannot be attributed")
++    return tuple(parts)
++
++
++def _payload_for(
++    candidate: BenchmarkCandidate,
++    message: MessageV1,
++    case: BenchmarkCase,
++    dictionary: UserDictionary | None,
++) -> str:
++    if candidate == "natural_language":
++        return render_natural_language(message)
++    if candidate == "natural_language_freeform":
++        return case.freeform_text
++    if candidate == "json":
++        return render_json(message)
++    if candidate == "ac1":
++        return encode_message(message)
++    if candidate == "ac1_dictionary":
++        return encode_message(message, dictionary)
++    if candidate == "ac2":
++        return encode_message_ac2(message)
++    if candidate == "ac2_dictionary":
++        return encode_message_ac2(message, dictionary)
++    if candidate == "awp1":
++        return encode_awp1(message)
++    if candidate == "awp1_dictionary":
++        return encode_awp1(message, dictionary)
++    raise ValueError("unsupported benchmark candidate") from None
++
++
++def _stable_event_id(
++    ordinal: int,
++    profile_id: str,
++    candidate: str,
++    mode: str,
++    case_id: str,
++    event_kind: str,
++) -> str:
++    value = "\0".join((str(ordinal), profile_id, candidate, mode, case_id, event_kind))
++    return "awpb-" + hashlib.sha256(value.encode("utf-8")).hexdigest()
++
++
++def _not_applicable_comparison() -> BenchmarkComparison:
++    return BenchmarkComparison(
++        status="not_applicable", cost_delta_tokens=None,
++        break_even_status="not_applicable", first_strict_win=None,
++    )
++
++
++def _cannot_compare_comparison() -> BenchmarkComparison:
++    return BenchmarkComparison(
++        status="cannot_compare", cost_delta_tokens=None,
++        break_even_status="cannot_compare", first_strict_win=None,
++    )
++
++
++def _not_applicable_row(
++    *, ordinal: int, profile_id: str, mode: ReceiverMode, candidate: BenchmarkCandidate,
++    scenario: BenchmarkScenario, total_uses: int, source_hash: str, transport_hash: str,
++) -> BenchmarkRow:
++    return BenchmarkRow(
++        synthetic_corpus_ordinal=ordinal,
++        tokenizer_profile_id=profile_id,
++        receiver_mode=mode,
++        candidate_id=candidate,
++        metric_surface="not_applicable",
++        metric_status="not_applicable",
++        dictionary_condition="not_applicable",
++        dictionary_candidate_exposure="not_applicable",
++        reuse_unit=scenario.reuse.unit,
++        total_uses=total_uses,
++        case_count=len(scenario.cases),
++        event_count=0,
++        source_hash=source_hash,
++        transport_hash=transport_hash,
++        transport_bytes=None,
++        transport_tokens=None,
++        model_input_tokens=None,
++        synthetic_response_tokens=None,
++        distinct_text_event_tokens=None,
++        candidate_protocol_exposure_tokens=None,
++        candidate_protocol_setup_history_tokens=None,
++        candidate_protocol_setup_tokens=None,
++        negotiation_tokens=None,
++        dictionary_exposure_tokens=None,
++        dictionary_history_tokens=None,
++        dictionary_setup_tokens=None,
++        request_tokens=None,
++        response_tokens=None,
++        retry_tokens=None,
++        fallback_tokens=None,
++        per_use_cost_tokens=None,
++        amortized_cost_tokens=None,
++        lifecycle_cost_tokens=None,
++        strict_decode_status="not_applicable",
++        strict_decode_success_count=None,
++        full_field_equal_count=None,
++        hard_field_equal_count=None,
++        vs_natural_language_labelled=_not_applicable_comparison(),
++        vs_natural_language_freeform=_not_applicable_comparison(),
++    )
++
++
++def _has_incomplete_state(
++    state: ProtocolState | None,
++    scenario: BenchmarkScenario,
++    candidate: BenchmarkCandidate,
++) -> tuple[bool, bool, bool]:
++    """Return (protocol unknown, dictionary unknown, missing known text)."""
++    if state is None:
++        protocol_unknown = True
++        unknown_text = False
++    else:
++        protocol_unknown = (
++            state.state == "unknown_history"
++            or (state.state == "ready_history" and not state.history_complete)
++        )
++        unknown_text = (
++            (state.state == "cold_text_setup" and state.setup_text is None)
++            or (state.negotiation_required and state.negotiation_text is None)
++        )
++    dictionary_candidate = candidate in _DICTIONARY_CANDIDATES
++    if not dictionary_candidate or scenario.metadata_domain != "selected_dictionary_transport":
++        dictionary_unknown = False
++    else:
++        exposure = scenario.dictionary_candidate_exposure
++        dictionary_unknown = (
++            exposure.state == "unknown_history"
++            or (exposure.state == "ready_history" and not exposure.history_complete)
++        )
++        unknown_text = unknown_text or (
++            exposure.state == "cold_text_setup" and exposure.setup_text is None
++        )
++    return protocol_unknown, dictionary_unknown, unknown_text
++
++
++def _measure_group(events: list[CostEvent], profile: TokenizerProfile | None) -> int | None:
++    if not events:
++        return 0
++    summary = measure_cost_events(tuple(events), profile)
++    if summary.status != "exact_local_text":
++        return None
++    return summary.distinct_text_event_tokens
++
++
++def _make_candidate_metrics(
++    scenario: BenchmarkScenario,
++    dictionary: UserDictionary | None,
++    profile_id: str,
++    profile: TokenizerProfile | None,
++    candidate: BenchmarkCandidate,
++    mode: ReceiverMode,
++    total_uses: int,
++    ordinal: int,
++    transport_copy: tuple[MessageV1, ...] | None,
++    payload_cache: dict[tuple[str, str], tuple[str, object | None]],
++    request_cache: dict[tuple[str, str, str], tuple[str, tuple[CostPart, ...]]],
++) -> tuple[dict, int | None, int | None]:
++    """Return row values, one-unit setup, and one-use message cost."""
++    is_dictionary_candidate = candidate in _DICTIONARY_CANDIDATES
++    selected_dictionary = (
++        dictionary if is_dictionary_candidate
++        and scenario.metadata_domain == "selected_dictionary_transport" else None
++    )
++    protocol_state = next(
++        (state for state in scenario.protocol_states
++         if state.candidate_id == candidate and state.profile_id == profile_id),
++        None,
++    )
++    protocol_unknown, dictionary_unknown, unknown_text = _has_incomplete_state(
++        protocol_state, scenario, candidate
++    )
++    if scenario.metadata_domain == "selected_dictionary_transport" and is_dictionary_candidate:
++        dictionary_unknown = dictionary_unknown or selected_dictionary is None
++
++    tagged: dict[str, list[CostEvent]] = {
++        "protocol_history": [], "protocol_setup": [], "negotiation": [],
++        "dictionary_history": [], "dictionary_setup": [], "current_request": [],
++        "current_response": [],
++    }
++    all_events: list[CostEvent] = []
++    payload_bytes_known = True
++    strict_successes = 0
++    full_matches = 0
++    hard_matches = 0
++    freeform_gateway = candidate == "natural_language_freeform" and mode == "gateway"
++
++    if protocol_state is not None:
++        for index, history_event in enumerate(protocol_state.history):
++            copied = _copy_history_event(history_event, _stable_event_id(
++                ordinal, profile_id, candidate, mode, f"protocol-history-{index}", history_event.event_id,
++            ))
++            tagged["protocol_history"].append(copied)
++            all_events.append(copied)
++        if protocol_state.state == "cold_text_setup":
++            if protocol_state.setup_text is None:
++                unknown_text = True
++            else:
++                event = _new_event(
++                    _stable_event_id(ordinal, profile_id, candidate, mode, "protocol-setup", "setup"),
++                    "setup", "setup", protocol_state.setup_text,
++                )
++                tagged["protocol_setup"].append(event)
++                all_events.append(event)
++        if protocol_state.negotiation_text is not None:
++            event = _new_event(
++                _stable_event_id(ordinal, profile_id, candidate, mode, "negotiation", "negotiation"),
++                "negotiation", "negotiation", protocol_state.negotiation_text,
++            )
++            tagged["negotiation"].append(event)
++            all_events.append(event)
++
++    if selected_dictionary is not None:
++        exposure = scenario.dictionary_candidate_exposure
++        for index, history_event in enumerate(scenario.dictionary_history):
++            copied = _copy_history_event(history_event, _stable_event_id(
++                ordinal, profile_id, candidate, mode, f"dictionary-history-{index}", history_event.event_id,
++            ))
++            tagged["dictionary_history"].append(copied)
++            all_events.append(copied)
++        if exposure.state == "cold_text_setup":
++            if exposure.setup_text is None:
++                unknown_text = True
++            else:
++                event = _new_event(
++                    _stable_event_id(ordinal, profile_id, candidate, mode, "dictionary-setup", "distribution"),
++                    "dictionary_distribution", "dictionary_transfer", exposure.setup_text,
++                )
++                tagged["dictionary_setup"].append(event)
++                all_events.append(event)
++
++    # A complete out-of-band declaration is a real zero setup cost. An absent
++    # state is not interpreted as preinstalled and makes the total incomparable.
++    per_use_events: list[CostEvent] = []
++    for case_index, case in enumerate(scenario.cases):
++        cache_key = (candidate, case.case_id)
++        cached_payload = payload_cache.get(cache_key)
++        try:
++            if scenario.metadata_domain == "selected_dictionary_transport":
++                if transport_copy is None:
++                    raise ValueError("selected transport is unavailable")
++                message = transport_copy[case_index]
++            else:
++                message = MessageV1.model_validate(
++                    copy.deepcopy(case.source_message.model_dump(mode="python")), strict=True
++                )
++        except (TypeError, ValueError, AttributeError, RecursionError):
++            unknown_text = True
++            payload_bytes_known = False
++            continue
++        if cached_payload is None:
++            try:
++                payload = _payload_for(candidate, message, case, selected_dictionary)
++            except (TypeError, ValueError, AttributeError, RecursionError):
++                unknown_text = True
++                payload_bytes_known = False
++                payload_cache[cache_key] = ("", None)
++                continue
++            try:
++                delivery = deliver_benchmark_at_gateway(
++                    candidate, payload, scenario.receiver_capabilities,
++                    dictionary=selected_dictionary,
++                )
++            except (TypeError, ValueError, AttributeError, RecursionError):
++                delivery = None
++            payload_cache[cache_key] = (payload, delivery)
++        else:
++            payload, delivery = cached_payload
++            if not payload:
++                unknown_text = True
++                payload_bytes_known = False
++                continue
++
++        if candidate != "natural_language_freeform" and delivery is not None and delivery.decode_status == "decoded":
++            try:
++                restored = MessageV1.model_validate_json(delivery.model_context, strict=True)
++                gold = message.model_dump()
++                actual = restored.model_dump()
++                strict_successes += 1
++                full_matches += int(actual == gold)
++                hard_matches += int(all(actual[field] == gold[field] for field in _HARD_FIELDS))
++            except (TypeError, ValueError):
++                pass
++
++        if mode == "model_direct":
++            try:
++                request_key = (mode, candidate, case.case_id)
++                cached_request = request_cache.get(request_key)
++                if cached_request is None:
++                    complete_request = build_direct_model_request(
++                        case.task_prompt, candidate, payload, dictionary=selected_dictionary,
++                    )
++                    parts = _direct_request_parts(complete_request, case.task_prompt, payload)
++                    request_cache[request_key] = (complete_request, parts)
++                else:
++                    complete_request, parts = cached_request
++                request_event = CostEvent(
++                    event_id=_stable_event_id(ordinal, profile_id, candidate, mode, case.case_id, "request"),
++                    kind="request",
++                    surfaces=("transport", "model_input"),
++                    parts=parts,
++                    multiplicity=total_uses,
++                )
++                response_event = _new_event(
++                    _stable_event_id(ordinal, profile_id, candidate, mode, case.case_id, "response"),
++                    "response", "response", case.synthetic_response_fixture,
++                    surfaces=("model_output",), multiplicity=total_uses,
++                )
++            except (TypeError, ValueError, AttributeError, RecursionError):
++                unknown_text = True
++                payload_bytes_known = False
++                continue
++            per_use_events.extend((request_event.model_copy(update={"multiplicity": 1}),
++                                   response_event.model_copy(update={"multiplicity": 1})))
++            tagged["current_request"].append(request_event)
++            tagged["current_response"].append(response_event)
++            all_events.extend((request_event, response_event))
++        else:
++            wire_event = _new_event(
++                _stable_event_id(ordinal, profile_id, candidate, mode, case.case_id, "wire-request"),
++                "request", "payload", payload,
++                surfaces=("transport",), multiplicity=total_uses,
++            )
++            per_use_events.append(wire_event.model_copy(update={"multiplicity": 1}))
++            tagged["current_request"].append(wire_event)
++            all_events.append(wire_event)
++            if delivery is not None and delivery.decode_status == "decoded":
++                context_event = _new_event(
++                    _stable_event_id(ordinal, profile_id, candidate, mode, case.case_id, "model-context"),
++                    "request", "context", delivery.model_context,
++                    surfaces=("model_input",), multiplicity=total_uses,
++                )
++                response_event = _new_event(
++                    _stable_event_id(ordinal, profile_id, candidate, mode, case.case_id, "response"),
++                    "response", "response", case.synthetic_response_fixture,
++                    surfaces=("model_output",), multiplicity=total_uses,
++                )
++                per_use_events.extend((context_event.model_copy(update={"multiplicity": 1}),
++                                       response_event.model_copy(update={"multiplicity": 1})))
++                tagged["current_request"].append(context_event)
++                tagged["current_response"].append(response_event)
++                all_events.extend((context_event, response_event))
++
++    try:
++        summary = measure_cost_events(tuple(all_events), profile)
++    except (TypeError, ValueError, RecursionError):
++        summary = None
++        unknown_text = True
++
++    profile_known = summary is not None and summary.status == "exact_local_text"
++    state_unknown = protocol_unknown or dictionary_unknown
++    if summary is None:
++        transport_bytes = None
++    else:
++        transport_bytes = summary.transport_bytes if payload_bytes_known and not state_unknown else None
++
++    def event_kind(kind: str) -> int | None:
++        if not profile_known or state_unknown or unknown_text:
++            return None
++        return summary.event_kind_tokens[kind]
++
++    def group_cost(tag: str, unknown: bool = False) -> int | None:
++        if unknown:
++            return None
++        if not profile_known:
++            return None
++        return _measure_group(tagged[tag], profile)
++
++    protocol_history_cost = group_cost("protocol_history", protocol_unknown)
++    protocol_setup_cost = group_cost(
++        "protocol_setup",
++        protocol_unknown or (
++            unknown_text and protocol_state is not None
++            and protocol_state.state == "cold_text_setup"
++        ),
++    )
++    negotiation_cost = group_cost(
++        "negotiation",
++        protocol_unknown or (
++            unknown_text and protocol_state is not None
++            and protocol_state.negotiation_required
++        ),
++    )
++    dictionary_history_cost = group_cost("dictionary_history", dictionary_unknown)
++    dictionary_setup_cost = group_cost(
++        "dictionary_setup",
++        dictionary_unknown or (
++            unknown_text and selected_dictionary is not None
++            and scenario.dictionary_candidate_exposure.state == "cold_text_setup"
++        ),
++    )
++    if profile_known:
++        protocol_exposure = (
++            summary.part_label_tokens["protocol_instructions"]
++            if not unknown_text else None
++        )
++        dictionary_exposure_cost = (
++            summary.part_label_tokens["dictionary_glossary"]
++            if not unknown_text else None
++        )
++        model_input_tokens = (
++            summary.model_input_tokens if not state_unknown and not unknown_text else None
++        )
++        synthetic_response_tokens = (
++            summary.model_output_tokens if not state_unknown and not unknown_text else None
++        )
++        distinct_tokens = summary.distinct_text_event_tokens if not state_unknown and not unknown_text else None
++    else:
++        protocol_exposure = None
++        dictionary_exposure_cost = None
++        model_input_tokens = None
++        synthetic_response_tokens = None
++        distinct_tokens = None
++
++    request_tokens = event_kind("request")
++    response_tokens = event_kind("response")
++    retry_tokens = event_kind("retry")
++    fallback_tokens = event_kind("fallback")
++    transport_tokens = (
++        summary.transport_tokens if profile_known and not state_unknown and not unknown_text else None
++    )
++    if (
++        profile_known and not state_unknown and not unknown_text
++        and scenario.reuse.unit in _SUPPORTED_REUSE_UNITS
++    ):
++        per_use_summary = measure_cost_events(tuple(per_use_events), profile)
++        per_use = (
++            per_use_summary.distinct_text_event_tokens
++            if per_use_summary.status == "exact_local_text" else None
++        )
++        lifecycle = summary.distinct_text_event_tokens
++        amortized = lifecycle / total_uses
++    else:
++        per_use = None
++        lifecycle = None
++        amortized = None
++
++    metric_surface = (
++        "end_to_end" if mode == "model_direct"
++        else "transport_only" if freeform_gateway
++        else "transport_and_model"
++    )
++    if not profile_known or state_unknown or unknown_text or scenario.reuse.unit not in _SUPPORTED_REUSE_UNITS:
++        metric_status = "cannot_compare"
++    elif freeform_gateway:
++        metric_status = "transport_only"
++    else:
++        metric_status = "exact_local_text"
++
++    if candidate == "natural_language_freeform":
++        strict_decode_status = "not_applicable"
++        strict_decode_success_count = None
++        full_field_equal_count = None
++        hard_field_equal_count = None
++    else:
++        strict_decode_status = "decoded" if strict_successes == len(scenario.cases) else "fallback_required"
++        strict_decode_success_count = strict_successes
++        full_field_equal_count = full_matches
++        hard_field_equal_count = hard_matches
++
++    request_and_response_per_use = per_use
++    setup_and_history: int | None
++    component_setup_values = (
++        protocol_history_cost, protocol_setup_cost, negotiation_cost,
++        dictionary_history_cost, dictionary_setup_cost,
++    )
++    if any(value is None for value in component_setup_values):
++        setup_and_history = None
++    else:
++        setup_and_history = sum(component_setup_values)
++
++    row_values = {
++        "metric_surface": metric_surface,
++        "metric_status": metric_status,
++        "dictionary_condition": "selected" if selected_dictionary is not None else "none",
++        "dictionary_candidate_exposure": (
++            scenario.dictionary_candidate_exposure.state
++            if selected_dictionary is not None else "not_applicable"
++        ),
++        "event_count": (
++            None
++            if state_unknown or unknown_text or scenario.reuse.unit not in _SUPPORTED_REUSE_UNITS
++            else sum(event.multiplicity for event in all_events)
++        ),
++        "transport_bytes": transport_bytes,
++        "transport_tokens": transport_tokens,
++        "model_input_tokens": model_input_tokens if not freeform_gateway else None,
++        "synthetic_response_tokens": synthetic_response_tokens if not freeform_gateway else None,
++        "distinct_text_event_tokens": None if freeform_gateway else distinct_tokens,
++        "candidate_protocol_exposure_tokens": None if freeform_gateway else protocol_exposure,
++        "candidate_protocol_setup_history_tokens": None if freeform_gateway else protocol_history_cost,
++        "candidate_protocol_setup_tokens": None if freeform_gateway else protocol_setup_cost,
++        "negotiation_tokens": None if freeform_gateway else negotiation_cost,
++        "dictionary_exposure_tokens": None if freeform_gateway else dictionary_exposure_cost,
++        "dictionary_history_tokens": None if freeform_gateway else dictionary_history_cost,
++        "dictionary_setup_tokens": None if freeform_gateway else dictionary_setup_cost,
++        "request_tokens": None if freeform_gateway else request_tokens,
++        "response_tokens": response_tokens if not freeform_gateway else None,
++        "retry_tokens": None if freeform_gateway else retry_tokens,
++        "fallback_tokens": None if freeform_gateway else fallback_tokens,
++        "per_use_cost_tokens": None if freeform_gateway else request_and_response_per_use,
++        "amortized_cost_tokens": None if freeform_gateway else amortized,
++        "lifecycle_cost_tokens": None if freeform_gateway else lifecycle,
++        "strict_decode_status": strict_decode_status,
++        "strict_decode_success_count": strict_decode_success_count,
++        "full_field_equal_count": full_field_equal_count,
++        "hard_field_equal_count": hard_field_equal_count,
++    }
++    return row_values, setup_and_history, request_and_response_per_use
++
++
++def _comparison(
++    candidate_row: BenchmarkRow,
++    baseline_row: BenchmarkRow | None,
++    candidate_setup: int | None,
++    candidate_per_use: int | None,
++    baseline_setup: int | None,
++    baseline_per_use: int | None,
++    *,
++    applicable: bool,
++) -> BenchmarkComparison:
++    if not applicable:
++        return _not_applicable_comparison()
++    if (
++        baseline_row is None or candidate_row.metric_status != "exact_local_text"
++        or baseline_row.metric_status != "exact_local_text"
++        or candidate_row.lifecycle_cost_tokens is None
++        or baseline_row.lifecycle_cost_tokens is None
++        or candidate_setup is None or candidate_per_use is None
++        or baseline_setup is None or baseline_per_use is None
++    ):
++        return _cannot_compare_comparison()
++    result = calculate_break_even(
++        candidate_setup, candidate_per_use, baseline_setup, baseline_per_use
++    )
++    return BenchmarkComparison(
++        status=result.status,
++        cost_delta_tokens=candidate_row.lifecycle_cost_tokens - baseline_row.lifecycle_cost_tokens,
++        break_even_status=result.status,
++        first_strict_win=result.first_strict_win,
++    )
++
++
++def _profile_map(tokenizer_profiles: Mapping[str, TokenizerProfile]) -> dict[str, TokenizerProfile]:
++    try:
++        if not isinstance(tokenizer_profiles, Mapping):
++            raise ValueError
++        result = {}
++        for key, value in tokenizer_profiles.items():
++            if not isinstance(key, str) or not key:
++                continue
++            if isinstance(value, TokenizerProfile):
++                result[key] = TokenizerProfile.model_validate(value)
++        return result
++    except (TypeError, ValueError, AttributeError):
++        return {}
++
++
++def run_agentwire_benchmark(
++    scenarios: tuple[BenchmarkScenario, ...],
++    tokenizer_profiles: Mapping[str, TokenizerProfile],
++    dictionary: UserDictionary | None = None,
++) -> AgentWireBenchmarkReport:
++    """Run paired local measurements for each independent domain/profile scope."""
++    if type(scenarios) is not tuple or not scenarios:
++        raise ValueError("benchmark scenarios rejected") from None
++    checked_scenarios = tuple(BenchmarkScenario.model_validate(item) for item in scenarios)
++    profiles = _profile_map(tokenizer_profiles)
++    output_scenarios: list[ScenarioReport] = []
++
++    for ordinal, scenario in enumerate(checked_scenarios, start=1):
++        selected_dictionary = None
++        transport_copy = None
++        if scenario.metadata_domain == "selected_dictionary_transport":
++            if not isinstance(dictionary, UserDictionary):
++                raise ValueError("benchmark scenario rejected") from None
++            try:
++                selected_dictionary = UserDictionary.model_validate(
++                    copy.deepcopy(dictionary.model_dump(mode="python")), strict=True
++                )
++                selected_identity = dictionary_identity_for(selected_dictionary)
++                if (
++                    selected_identity.user_id != scenario.receiver_capabilities.user_id
++                    or scenario.receiver_capabilities.dictionary_identity != selected_identity
++                ):
++                    raise ValueError
++                transport_copy = tuple(
++                    prepare_transport_message(case.source_message, selected_dictionary)
++                    for case in scenario.cases
++                )
++            except (TypeError, ValueError, AttributeError, RecursionError):
++                raise ValueError("benchmark scenario rejected") from None
++
++        state_profile_ids = {state.profile_id for state in scenario.protocol_states}
++        profile_ids = sorted(state_profile_ids | set(profiles))
++        if not profile_ids:
++            profile_ids = ["unknown-tokenizer"]
++
++        for profile_id in profile_ids:
++            profile = profiles.get(profile_id)
++            source_hash = _domain_hash("source", scenario, profile_id, selected_dictionary)
++            transport_hash = _domain_hash(
++                "selected_dictionary_transport", scenario, profile_id, selected_dictionary
++            )
++            intermediate: dict[tuple[str, str, int], tuple[dict, int | None, int | None]] = {}
++            rows: list[BenchmarkRow] = []
++            payload_cache: dict[tuple[str, str], tuple[str, object | None]] = {}
++            request_cache: dict[tuple[str, str, str], tuple[str, tuple[CostPart, ...]]] = {}
++            for mode in ("model_direct", "gateway"):
++                for candidate in _CANDIDATE_ORDER:
++                    allowed = (
++                        candidate in _SOURCE_ALLOWLIST
++                        if scenario.metadata_domain == "source"
++                        else candidate in _SELECTED_ALLOWLIST
++                    )
++                    for total_uses in scenario.reuse.total_uses:
++                        if not allowed:
++                            row = _not_applicable_row(
++                                ordinal=ordinal, profile_id=profile_id, mode=mode,
++                                candidate=candidate, scenario=scenario, total_uses=total_uses,
++                                source_hash=source_hash, transport_hash=transport_hash,
++                            )
++                            rows.append(row)
++                            intermediate[(candidate, mode, total_uses)] = ({}, None, None)
++                            continue
++                        values, setup, per_use = _make_candidate_metrics(
++                            scenario, selected_dictionary, profile_id, profile, candidate,
++                            mode, total_uses, ordinal, transport_copy,
++                            payload_cache, request_cache,
++                        )
++                        row = BenchmarkRow(
++                            synthetic_corpus_ordinal=ordinal,
++                            tokenizer_profile_id=profile_id,
++                            receiver_mode=mode,
++                            candidate_id=candidate,
++                            reuse_unit=scenario.reuse.unit,
++                            total_uses=total_uses,
++                            case_count=len(scenario.cases),
++                            source_hash=source_hash,
++                            transport_hash=transport_hash,
++                            vs_natural_language_labelled=_not_applicable_comparison(),
++                            vs_natural_language_freeform=_not_applicable_comparison(),
++                            **values,
++                        )
++                        rows.append(row)
++                        intermediate[(candidate, mode, total_uses)] = (values, setup, per_use)
++
++            completed_rows: list[BenchmarkRow] = []
++            for row in rows:
++                if row.metric_status == "not_applicable":
++                    completed_rows.append(row)
++                    continue
++                _, candidate_setup, candidate_per_use = intermediate[
++                    (row.candidate_id, row.receiver_mode, row.total_uses)
++                ]
++                labelled_row = next((item for item in rows if (
++                    item.candidate_id == "natural_language"
++                    and item.receiver_mode == row.receiver_mode
++                    and item.total_uses == row.total_uses
++                )), None)
++                freeform_row = next((item for item in rows if (
++                    item.candidate_id == "natural_language_freeform"
++                    and item.receiver_mode == row.receiver_mode
++                    and item.total_uses == row.total_uses
++                )), None)
++                _, labelled_setup, labelled_per_use = intermediate.get(
++                    ("natural_language", row.receiver_mode, row.total_uses), ({}, None, None)
++                )
++                _, freeform_setup, freeform_per_use = intermediate.get(
++                    ("natural_language_freeform", row.receiver_mode, row.total_uses), ({}, None, None)
++                )
++                freeform_applicable = (
++                    scenario.metadata_domain == "source"
++                    and row.receiver_mode == "model_direct"
++                )
++                labelled_applicable = (
++                    row.candidate_id in (
++                        _SOURCE_ALLOWLIST if scenario.metadata_domain == "source"
++                        else _SELECTED_ALLOWLIST
++                    )
++                    and row.receiver_mode != "gateway"
++                    or (
++                        row.candidate_id in (
++                            _SOURCE_ALLOWLIST if scenario.metadata_domain == "source"
++                            else _SELECTED_ALLOWLIST
++                        )
++                        and row.receiver_mode == "gateway"
++                        and row.metric_surface == "transport_and_model"
++                    )
++                )
++                if row.receiver_mode == "gateway" and row.candidate_id == "natural_language_freeform":
++                    labelled_applicable = False
++                if scenario.metadata_domain == "selected_dictionary_transport":
++                    freeform_applicable = False
++                labelled_comparison = _comparison(
++                    row, labelled_row, candidate_setup, candidate_per_use,
++                    labelled_setup, labelled_per_use, applicable=labelled_applicable,
++                )
++                freeform_comparison = _comparison(
++                    row, freeform_row, candidate_setup, candidate_per_use,
++                    freeform_setup, freeform_per_use, applicable=freeform_applicable,
++                )
++                completed_rows.append(row.model_copy(update={
++                    "vs_natural_language_labelled": labelled_comparison,
++                    "vs_natural_language_freeform": freeform_comparison,
++                }))
++
++            output_scenarios.append(ScenarioReport(
++                metadata_domain=scenario.metadata_domain,
++                reuse_unit=scenario.reuse.unit,
++                source_hash=source_hash,
++                transport_hash=transport_hash,
++                rows=tuple(completed_rows),
++            ))
++
++    return AgentWireBenchmarkReport(scenarios=tuple(output_scenarios))
+diff --git a/tests/test_agentwire_benchmark.py b/tests/test_agentwire_benchmark.py
+new file mode 100644
+index 0000000..ccba551
+--- /dev/null
++++ b/tests/test_agentwire_benchmark.py
+@@ -0,0 +1,782 @@
++"""Synthetic-only tests for paired AgentWire benchmark domains and reuse."""
++
++import importlib
++import json
++from pathlib import Path
++
++import pytest
++
++from agentcodec.adaptive import meter
++from agentcodec.adaptive.contracts import MeasuredAttempt, TokenizerProfile
++from agentcodec.agentwire import contracts
++from agentcodec.agentwire.contracts import ReceiverCapabilities, dictionary_identity_for
++from agentcodec.schema import MessageV1, UserDictionary
++
++
++PROFILE_ID = "synthetic-byte-count-v1"
++FIXTURE_DIR = Path(__file__).parents[1] / "bench" / "agentwire"
++ALL_CANDIDATES = (
++    "natural_language", "natural_language_freeform", "json", "ac1",
++    "ac1_dictionary", "ac2", "ac2_dictionary", "awp1", "awp1_dictionary",
++)
++SOURCE_ALLOWLIST = {
++    "natural_language", "natural_language_freeform", "json", "ac1", "ac2", "awp1",
++}
++SELECTED_ALLOWLIST = {
++    "natural_language", "json", "awp1", "ac1_dictionary", "ac2_dictionary",
++    "awp1_dictionary",
++}
++
++
++@pytest.fixture
++def api():
++    try:
++        return importlib.import_module("agentcodec.agentwire.benchmark")
++    except ModuleNotFoundError as error:
++        if error.name == "agentcodec.agentwire.benchmark":
++            class MissingBenchmark:
++                def __getattr__(self, name):
++                    pytest.fail(f"AgentWire benchmark API is not implemented: {name}", pytrace=False)
++
++            return MissingBenchmark()
++        raise
++
++
++def _fixture_records():
++    return [
++        json.loads(line)
++        for line in (FIXTURE_DIR / "exchanges.v1.jsonl").read_text(encoding="utf-8").splitlines()
++        if line
++    ]
++
++
++def _cases(api, records=None):
++    records = _fixture_records() if records is None else records
++    return tuple(
++        api.BenchmarkCase(
++            case_id=record["case_id"],
++            task_prompt=record["task_prompt"],
++            source_message=MessageV1.model_validate(record["source_message"], strict=True),
++            freeform_text=record["freeform_text"],
++            freeform_annotations={key: tuple(value) for key, value in record["freeform_annotations"].items()},
++            synthetic_response_fixture=record["synthetic_response_fixture"],
++        )
++        for record in records
++    )
++
++
++def _dictionary():
++    return UserDictionary.model_validate(
++        json.loads((FIXTURE_DIR / "dictionary.v1.json").read_text(encoding="utf-8")),
++        strict=True,
++    )
++
++
++def _profile():
++    return TokenizerProfile(
++        encoding_name="synthetic-byte-count",
++        library_version="0.0.synthetic",
++        vocabulary_sha256="0" * 64,
++        accuracy="exact_local_text",
++        mapping_basis="test-only deterministic UTF-8 byte meter",
++    )
++
++
++def _event(event_id, kind, label, text, surfaces=("transport",)):
++    return contracts.CostEvent(
++        event_id=event_id,
++        kind=kind,
++        surfaces=surfaces,
++        parts=(contracts.CostPart(label=label, text=text),),
++    )
++
++
++def _scenario(
++    api,
++    cases,
++    *,
++    domain="source",
++    unit="same_message_instance",
++    states=None,
++    dictionary_exposure=None,
++    dictionary_history=(),
++    dictionary=None,
++    scope_id="synthetic-scope-a",
++    receiver_user="synthetic-user",
++    corpus_id="synthetic-corpus-v1",
++):
++    selected = domain == "selected_dictionary_transport"
++    identity = dictionary_identity_for(dictionary) if selected and dictionary is not None else None
++    receiver = ReceiverCapabilities(
++        user_id=receiver_user,
++        supported_profile_versions=("AWP1",),
++        supported_schema_versions=("MessageV1",),
++        supported_enum_table_versions=("AWP1",),
++        max_message_bytes=2_000_000,
++        dictionary_identity=identity,
++    )
++    supplied = {} if states is None else dict(states)
++    protocol_states = [
++        supplied.get(
++            candidate,
++            api.ProtocolState(
++                candidate_id=candidate,
++                profile_id=PROFILE_ID,
++                state="out_of_band_preinstalled",
++            ),
++        )
++        for candidate in ALL_CANDIDATES
++    ]
++    protocol_states.extend(
++        state for state in supplied.values()
++        if isinstance(state, api.ProtocolState) and state not in protocol_states
++    )
++    if dictionary_exposure is None:
++        dictionary_exposure = api.DictionaryExposure(
++            state="out_of_band_preinstalled" if selected else "not_applicable"
++        )
++    return api.BenchmarkScenario(
++        scenario_id=f"private-{domain}-scenario",
++        scope_id=scope_id,
++        corpus_id=corpus_id,
++        metadata_domain=domain,
++        receiver_capabilities=receiver,
++        protocol_states=tuple(protocol_states),
++        dictionary_candidate_exposure=dictionary_exposure,
++        dictionary_history=tuple(dictionary_history),
++        cases=tuple(cases),
++        reuse=api.ReuseScenario(unit=unit, total_uses=(1, 10, 50)),
++    )
++
++
++def _byte_meter(monkeypatch):
++    observed = []
++
++    def measure_attempts(attempts, tokenizer_profile):
++        results = []
++        for attempt in attempts:
++            observed.append((attempt, tokenizer_profile))
++            deltas = tuple(len(component.text.encode("utf-8")) for component in attempt.components)
++            results.append(MeasuredAttempt(
++                event_id=attempt.event_id,
++                attempt_kind=attempt.attempt_kind,
++                total_tokens=sum(deltas),
++                component_tokens=deltas,
++                simulated=attempt.simulated,
++                multiplicity=attempt.multiplicity,
++            ))
++        return tuple(results)
++
++    monkeypatch.setattr(meter, "measure_attempts", measure_attempts)
++    return observed
++
++
++def _run(api, scenarios, monkeypatch, dictionary=None, profiles=None):
++    _byte_meter(monkeypatch)
++    return api.run_agentwire_benchmark(
++        tuple(scenarios),
++        {PROFILE_ID: _profile()} if profiles is None else profiles,
++        dictionary=dictionary,
++    )
++
++
++def _domain_report(report, domain):
++    return next(item for item in report.scenarios if item.metadata_domain == domain)
++
++
++def _row(scenario_report, *, candidate, mode="gateway", total_uses=1):
++    return next(
++        row for row in scenario_report.rows
++        if row.candidate_id == candidate
++        and row.receiver_mode == mode
++        and row.total_uses == total_uses
++    )
++
++
++def test_candidate_allowlists_are_domain_specific(api, monkeypatch):
++    dictionary = _dictionary()
++    case = _cases(api, _fixture_records()[:1])
++    source = _scenario(api, case)
++    selected = _scenario(
++        api, case, domain="selected_dictionary_transport", dictionary=dictionary,
++    )
++
++    report = _run(api, (source, selected), monkeypatch, dictionary=dictionary)
++    source_rows = _domain_report(report, "source").rows
++    selected_rows = _domain_report(report, "selected_dictionary_transport").rows
++    source_candidates = {row.candidate_id for row in source_rows if row.metric_status != "not_applicable"}
++    selected_candidates = {
++        row.candidate_id for row in selected_rows if row.metric_status != "not_applicable"
++    }
++
++    assert source_candidates == SOURCE_ALLOWLIST
++    assert selected_candidates == SELECTED_ALLOWLIST
++    selected_by_id = {row.candidate_id: row for row in selected_rows if row.receiver_mode == "gateway"}
++    assert selected_by_id["natural_language_freeform"].metric_status == "not_applicable"
++    assert selected_by_id["ac1"].metric_status == "not_applicable"
++    assert selected_by_id["ac2"].metric_status == "not_applicable"
++    assert selected_by_id["ac1_dictionary"].metric_status != "not_applicable"
++    assert selected_by_id["ac2_dictionary"].metric_status != "not_applicable"
++    assert selected_by_id["awp1"].candidate_id in SELECTED_ALLOWLIST
++    assert selected_by_id["natural_language_freeform"].transport_bytes is None
++    assert selected_by_id["natural_language_freeform"].vs_natural_language_labelled.status == "not_applicable"
++    assert selected_by_id["natural_language_freeform"].vs_natural_language_freeform.status == "not_applicable"
++    assert selected_by_id["ac1"].vs_natural_language_labelled.status == "not_applicable"
++    source_labelled = _row(_domain_report(report, "source"), candidate="natural_language")
++    selected_labelled = _row(_domain_report(report, "selected_dictionary_transport"), candidate="natural_language")
++    assert source_labelled.transport_bytes != selected_labelled.transport_bytes
++
++
++def test_natural_language_labelled_baseline_uses_same_domain_message(api, monkeypatch):
++    import agentcodec.agentwire.benchmark as benchmark_module
++    from agentcodec.benchmark import render_natural_language as real_renderer
++
++    seen = []
++
++    def record_real_renderer(message):
++        seen.append(message)
++        return real_renderer(message)
++
++    monkeypatch.setattr(benchmark_module, "render_natural_language", record_real_renderer)
++    dictionary = _dictionary()
++    one_case = _cases(api, _fixture_records()[:1])
++    source = _scenario(api, one_case)
++    selected = _scenario(
++        api, one_case, domain="selected_dictionary_transport", dictionary=dictionary,
++    )
++    _run(api, (source, selected), monkeypatch, dictionary=dictionary)
++
++    assert len(seen) == 2
++    assert seen[0].model_dump() == one_case[0].source_message.model_dump()
++    expected_transport = api.prepare_transport_message(one_case[0].source_message, dictionary)
++    assert seen[1].model_dump() == expected_transport.model_dump()
++    assert seen[1].dictionary_version == dictionary.version
++
++
++def test_human_freeform_is_paired_and_manually_annotated(api):
++    records = _fixture_records()
++    assert len(records) == 20
++    assert sum(record["case_id"].startswith("delegation-") for record in records) == 10
++    assert sum(record["case_id"].startswith("workflow-") for record in records) == 10
++    cases = _cases(api, records)
++    for case, record in zip(cases, records, strict=True):
++        assert case.case_id == record["case_id"]
++        assert case.task_prompt == record["task_prompt"]
++        assert case.source_message.model_dump() == record["source_message"]
++        assert case.freeform_text == record["freeform_text"]
++        assert case.freeform_text != __import__("agentcodec.benchmark", fromlist=["render_natural_language"]).render_natural_language(case.source_message)
++        assert case.freeform_annotations["key_semantics"]
++        assert case.freeform_annotations["hard_constraints"]
++        assert case.synthetic_response_fixture
++
++
++def test_prepare_transport_message_preserves_source_and_only_changes_selected_copy(api):
++    source = MessageV1(
++        message_id="transport-copy-check",
++        message_type="delegate",
++        task="Synthetic transport test.",
++        status="pending",
++        blocker=None,
++        next_step="Keep source unchanged.",
++        evidence=["synthetic-evidence"],
++        constraints=["No external calls."],
++        approval_required=False,
++        user_id="synthetic-user",
++        dictionary_version=None,
++    )
++    before = source.model_dump()
++    selected = api.prepare_transport_message(source, _dictionary())
++
++    assert source.model_dump() == before
++    differences = {
++        key for key in before
++        if before[key] != selected.model_dump()[key]
++    }
++    assert differences == {"dictionary_version"}
++    assert selected.dictionary_version == "synthetic-dictionary-v1"
++    assert selected is not source
++
++
++def test_non_null_conflicting_dictionary_version_rejects_domain(api):
++    source = MessageV1(
++        message_id="conflicting-version-check",
++        message_type="delegate",
++        task="Synthetic conflicting metadata.",
++        status="pending",
++        blocker=None,
++        next_step="Reject the mismatch.",
++        evidence=[],
++        constraints=[],
++        approval_required=False,
++        user_id="synthetic-user",
++        dictionary_version="different-synthetic-version",
++    )
++    with pytest.raises(ValueError):
++        api.prepare_transport_message(source, _dictionary())
++    assert source.dictionary_version == "different-synthetic-version"
++
++
++def test_gateway_decodes_structured_and_labelled_conditions_to_same_domain_message(api, monkeypatch):
++    dictionary = _dictionary()
++    one_case = _cases(api, _fixture_records()[:1])
++    scenarios = (
++        _scenario(api, one_case),
++        _scenario(api, one_case, domain="selected_dictionary_transport", dictionary=dictionary),
++    )
++    report = _run(api, scenarios, monkeypatch, dictionary=dictionary)
++
++    source_report = _domain_report(report, "source")
++    for candidate in ("natural_language", "json", "ac1", "ac2", "awp1"):
++        row = _row(source_report, candidate=candidate)
++        assert row.strict_decode_status == "decoded"
++        assert row.full_field_equal_count == 1
++        assert row.hard_field_equal_count == 1
++    selected_report = _domain_report(report, "selected_dictionary_transport")
++    for candidate in ("natural_language", "json", "awp1", "ac1_dictionary", "ac2_dictionary", "awp1_dictionary"):
++        row = _row(selected_report, candidate=candidate)
++        assert row.strict_decode_status == "decoded"
++        assert row.full_field_equal_count == 1
++        assert row.hard_field_equal_count == 1
++
++
++def test_gateway_freeform_is_transport_only_and_equality_metrics_are_not_applicable(api, monkeypatch):
++    import agentcodec.agentwire.benchmark as benchmark_module
++
++    cases = _cases(api, _fixture_records()[:1])
++    deliveries = []
++    real_delivery = benchmark_module.deliver_benchmark_at_gateway
++
++    def record_delivery(candidate_id, payload, receiver, dictionary=None):
++        delivery = real_delivery(candidate_id, payload, receiver, dictionary=dictionary)
++        if candidate_id == "natural_language_freeform":
++            deliveries.append((payload, delivery))
++        return delivery
++
++    monkeypatch.setattr(benchmark_module, "deliver_benchmark_at_gateway", record_delivery)
++    source_scenario = _scenario(api, cases)
++    report = _run(api, (source_scenario,), monkeypatch)
++    row = _row(_domain_report(report, "source"), candidate="natural_language_freeform")
++
++    assert len(deliveries) == 1
++    assert deliveries[0][0] == cases[0].freeform_text
++    assert deliveries[0][1].decode_status == "pass_through"
++    assert deliveries[0][1].pass_through_text == cases[0].freeform_text
++    assert deliveries[0][1].model_context is None
++    assert row.transport_bytes == len(cases[0].freeform_text.encode("utf-8"))
++    assert row.transport_tokens == row.transport_bytes
++    assert row.strict_decode_status == "not_applicable"
++    assert row.full_field_equal_count is None
++    assert row.hard_field_equal_count is None
++    assert row.model_input_tokens is None
++    assert row.synthetic_response_tokens is None
++    assert row.distinct_text_event_tokens is None
++    for field in (
++        "candidate_protocol_exposure_tokens", "candidate_protocol_setup_history_tokens",
++        "candidate_protocol_setup_tokens", "negotiation_tokens", "dictionary_exposure_tokens",
++        "dictionary_history_tokens", "dictionary_setup_tokens", "request_tokens",
++        "response_tokens", "retry_tokens", "fallback_tokens", "per_use_cost_tokens",
++        "amortized_cost_tokens", "lifecycle_cost_tokens",
++    ):
++        assert getattr(row, field) is None
++    assert row.metric_surface == "transport_only"
++
++
++def test_direct_mode_counts_common_prompt_context_and_response_fixture_for_freeform(api, monkeypatch):
++    import agentcodec.agentwire.benchmark as benchmark_module
++
++    cases = _cases(api, _fixture_records()[:1])
++    seen_requests = []
++    real_builder = benchmark_module.build_direct_model_request
++
++    def recording_builder(context_prefix, candidate_id, wire_payload, dictionary=None):
++        result = real_builder(context_prefix, candidate_id, wire_payload, dictionary=dictionary)
++        seen_requests.append((context_prefix, candidate_id, wire_payload, result))
++        return result
++
++    monkeypatch.setattr(benchmark_module, "build_direct_model_request", recording_builder)
++    observed = _byte_meter(monkeypatch)
++    report = api.run_agentwire_benchmark(
++        (_scenario(api, cases),), {PROFILE_ID: _profile()}, dictionary=None,
++    )
++    row = _row(_domain_report(report, "source"), candidate="natural_language_freeform", mode="model_direct")
++    matching = [item for item in seen_requests if item[1] == "natural_language_freeform"]
++
++    assert len(matching) == 1
++    prompt, _, payload, complete_request = matching[0]
++    assert prompt == cases[0].task_prompt
++    assert payload == cases[0].freeform_text
++    assert prompt in complete_request and payload in complete_request
++    assert row.model_input_tokens == len(complete_request.encode("utf-8"))
++    assert row.synthetic_response_tokens == len(cases[0].synthetic_response_fixture.encode("utf-8"))
++    measured_texts = ["".join(part.text for part in attempt.components) for attempt, _ in observed]
++    assert complete_request in measured_texts
++    assert cases[0].synthetic_response_fixture in measured_texts
++    assert row.vs_natural_language_labelled.status in {"finite", "never", "cannot_compare"}
++    assert row.vs_natural_language_freeform.status in {"finite", "never", "cannot_compare"}
++
++
++def test_protocol_state_is_candidate_scoped_and_dictionary_history_is_separate(api, monkeypatch):
++    cases = _cases(api, _fixture_records()[:1])
++    history = _event("synthetic-dictionary-history", "dictionary_distribution", "dictionary_transfer", "synthetic glossary delivered")
++    states = {
++        "json": api.ProtocolState(
++            candidate_id="json", profile_id=PROFILE_ID, state="cold_text_setup",
++            setup_text="Synthetic JSON protocol setup.",
++        ),
++        "ac1": api.ProtocolState(
++            candidate_id="ac1", profile_id=PROFILE_ID, state="ready_history",
++            history=(_event("synthetic-ac1-ready", "setup", "setup", "complete AC1 ready history"),),
++        ),
++        "ac2": api.ProtocolState(
++            candidate_id="ac2", profile_id=PROFILE_ID, state="unknown_history",
++            history_complete=False,
++        ),
++    }
++    source = _scenario(api, cases, states=states)
++    dictionary = _dictionary()
++    selected = _scenario(
++        api, cases, domain="selected_dictionary_transport", dictionary=dictionary,
++        dictionary_exposure=api.DictionaryExposure(state="ready_history"),
++        dictionary_history=(history,),
++    )
++    report = _run(api, (source, selected), monkeypatch, dictionary=dictionary)
++    source_rows = {row.candidate_id: row for row in _domain_report(report, "source").rows if row.receiver_mode == "gateway"}
++    selected_rows = {row.candidate_id: row for row in _domain_report(report, "selected_dictionary_transport").rows if row.receiver_mode == "gateway"}
++
++    assert source_rows["json"].candidate_protocol_setup_tokens == len("Synthetic JSON protocol setup.".encode())
++    assert source_rows["ac1"].candidate_protocol_setup_history_tokens == len("complete AC1 ready history".encode())
++    assert source_rows["ac1"].candidate_protocol_setup_tokens == 0
++    assert source_rows["ac2"].candidate_protocol_setup_history_tokens is None
++    assert source_rows["ac2"].candidate_protocol_setup_tokens is None
++    assert source_rows["ac2"].lifecycle_cost_tokens is None
++    assert selected_rows["natural_language"].dictionary_history_tokens == 0
++    assert selected_rows["ac1_dictionary"].dictionary_history_tokens == len("synthetic glossary delivered".encode())
++
++
++def test_same_instance_and_whole_corpus_reuse_have_distinct_denominators(api, monkeypatch):
++    records = _fixture_records()
++    all_cases = _cases(api, records)
++    one_case = (all_cases[0],)
++    same_message = _scenario(api, one_case, unit="same_message_instance", scope_id="scope-one-instance")
++    whole_corpus = _scenario(api, all_cases, unit="whole_corpus_pass", scope_id="scope-whole-corpus")
++    report = _run(api, (same_message, whole_corpus), monkeypatch)
++
++    single_rows = [row for row in _domain_report(report, "source").rows if row.candidate_id == "natural_language" and row.receiver_mode == "gateway" and row.reuse_unit == "same_message_instance"]
++    corpus_report = next(item for item in report.scenarios if item.reuse_unit == "whole_corpus_pass")
++    corpus_rows = [row for row in corpus_report.rows if row.candidate_id == "natural_language" and row.receiver_mode == "gateway"]
++    assert {row.case_count for row in single_rows} == {1}
++    assert {row.total_uses for row in single_rows} == {1, 10, 50}
++    single_by_uses = {row.total_uses: row for row in single_rows}
++    assert single_by_uses[10].event_count == 10 * single_by_uses[1].event_count
++    assert {row.case_count for row in corpus_rows} == {20}
++    assert {row.total_uses for row in corpus_rows} == {1, 10, 50}
++    corpus_by_uses = {row.total_uses: row for row in corpus_rows}
++    assert corpus_by_uses[10].event_count == 10 * corpus_by_uses[1].event_count
++    assert all(row.lifecycle_cost_tokens == row.amortized_cost_tokens * row.total_uses for row in corpus_rows)
++
++
++def test_scope_mismatch_never_amortizes_across_users_receivers_domains_or_dictionaries(api, monkeypatch):
++    dictionary = _dictionary()
++    cases = _cases(api, _fixture_records()[:1])
++    setup = _event("same-local-history-id", "setup", "setup", "complete synthetic profile history")
++    first = _scenario(api, cases, states={"json": api.ProtocolState(candidate_id="json", profile_id=PROFILE_ID, state="ready_history", history=(setup,))}, scope_id="scope-a")
++    second = _scenario(api, cases, states={"json": api.ProtocolState(candidate_id="json", profile_id=PROFILE_ID, state="ready_history", history=(setup,))}, scope_id="scope-b")
++    selected = _scenario(api, cases, domain="selected_dictionary_transport", dictionary=dictionary, scope_id="scope-a")
++    report = _run(api, (first, second, selected), monkeypatch, dictionary=dictionary)
++
++    histories = [
++        _row(item, candidate="json", total_uses=1).candidate_protocol_setup_history_tokens
++        for item in report.scenarios
++        if item.metadata_domain == "source" and item.reuse_unit == "same_message_instance"
++    ]
++    assert histories == [len("complete synthetic profile history".encode())] * 2
++    assert report.scenarios[0] != report.scenarios[1]
++    assert _domain_report(report, "selected_dictionary_transport").metadata_domain != "source"
++
++
++def test_unknown_history_tokenizer_and_reuse_never_become_zero_cost(api, monkeypatch):
++    cases = _cases(api, _fixture_records()[:1])
++    unknown = _scenario(
++        api, cases,
++        states={"json": api.ProtocolState(candidate_id="json", profile_id=PROFILE_ID, state="unknown_history", history_complete=False)},
++    )
++    report = _run(api, (unknown,), monkeypatch, profiles={})
++    row = _row(_domain_report(report, "source"), candidate="json")
++    assert row.metric_status == "cannot_compare"
++    assert row.transport_tokens is None
++    assert row.candidate_protocol_setup_history_tokens is None
++    assert row.lifecycle_cost_tokens is None
++    assert row.vs_natural_language_labelled.cost_delta_tokens is None
++    assert row.vs_natural_language_labelled.status == "cannot_compare"
++
++
++def test_break_even_comparisons_are_separate_and_labelled_is_not_real_freeform(api, monkeypatch):
++    cases = _cases(api, _fixture_records()[:1])
++    report = _run(api, (_scenario(api, cases),), monkeypatch)
++    row = _row(_domain_report(report, "source"), candidate="awp1", mode="model_direct")
++
++    assert hasattr(row, "vs_natural_language_labelled")
++    assert hasattr(row, "vs_natural_language_freeform")
++    assert row.vs_natural_language_labelled is not row.vs_natural_language_freeform
++    assert row.vs_natural_language_labelled.cost_delta_tokens is not None
++    assert row.vs_natural_language_freeform.cost_delta_tokens is not None
++    assert "real natural language" not in row.labelled_baseline_description.lower()
++
++
++def test_report_is_deterministic_and_redacts_payload_user_scope_and_content_hashes(api, monkeypatch):
++    cases = _cases(api, _fixture_records()[:1])
++    scenario = _scenario(api, cases, scope_id="secret-synthetic-scope")
++    first = _run(api, (scenario,), monkeypatch)
++    second = _run(api, (scenario,), monkeypatch)
++    serialized = first.model_dump_json()
++
++    assert first == second
++    assert "secret-synthetic-scope" not in serialized
++    assert "synthetic-user" not in serialized
++    assert cases[0].task_prompt not in serialized
++    assert cases[0].freeform_text not in serialized
++    assert cases[0].source_message.task not in serialized
++    assert "input_content_hash" not in serialized
++    assert "payload_sha256" not in serialized
++    assert first.version == "agentwire-benchmark-v1"
++
++
++def test_unknown_freeform_equality_metrics_are_null_not_zero(api, monkeypatch):
++    cases = _cases(api, _fixture_records()[:1])
++    report = _run(api, (_scenario(api, cases),), monkeypatch)
++    source_report = _domain_report(report, "source")
++    direct = _row(source_report, candidate="natural_language_freeform", mode="model_direct")
++    gateway = _row(source_report, candidate="natural_language_freeform", mode="gateway")
++
++    for row in (direct, gateway):
++        assert row.strict_decode_status == "not_applicable"
++        assert row.full_field_equal_count is None
++        assert row.hard_field_equal_count is None
++    assert gateway.metric_status == "transport_only"
++    assert gateway.model_input_tokens is None
++    assert gateway.synthetic_response_tokens is None
++    assert direct.model_input_tokens is not None
++    assert direct.synthetic_response_tokens is not None
++
++
++def test_direct_format_and_glossary_text_are_charged_per_request_but_cold_setup_once(api, monkeypatch):
++    import agentcodec.agentwire.benchmark as benchmark_module
++
++    dictionary = _dictionary()
++    cases = _cases(api, _fixture_records()[:1])
++    states = {
++        "awp1_dictionary": api.ProtocolState(
++            candidate_id="awp1_dictionary", profile_id=PROFILE_ID,
++            state="cold_text_setup", setup_text="Synthetic AWP1 instructions delivered once.",
++        ),
++    }
++    scenario = _scenario(
++        api, cases, domain="selected_dictionary_transport", dictionary=dictionary,
++        states=states,
++        dictionary_exposure=api.DictionaryExposure(
++            state="cold_text_setup", setup_text="Synthetic dictionary transferred once."
++        ),
++    )
++    built = []
++    real_builder = benchmark_module.build_direct_model_request
++
++    def record_builder(context_prefix, candidate_id, wire_payload, dictionary=None):
++        text = real_builder(context_prefix, candidate_id, wire_payload, dictionary=dictionary)
++        if candidate_id == "awp1_dictionary":
++            built.append(text)
++        return text
++
++    monkeypatch.setattr(benchmark_module, "build_direct_model_request", record_builder)
++    report = _run(api, (scenario,), monkeypatch, dictionary=dictionary)
++    selected_report = _domain_report(report, "selected_dictionary_transport")
++    rows = {
++        uses: _row(selected_report, candidate="awp1_dictionary", mode="model_direct", total_uses=uses)
++        for uses in (1, 10, 50)
++    }
++
++    assert len(built) == 1
++    assert "Format-specific instructions:" in built[0]
++    assert "Selected dictionary glossary" in built[0]
++    for phrase in dictionary.aliases.values():
++        assert json.dumps(phrase, ensure_ascii=False) in built[0]
++    assert rows[1].candidate_protocol_setup_tokens == len("Synthetic AWP1 instructions delivered once.".encode())
++    assert rows[10].candidate_protocol_setup_tokens == rows[1].candidate_protocol_setup_tokens
++    assert rows[1].dictionary_setup_tokens == len("Synthetic dictionary transferred once.".encode())
++    assert rows[10].dictionary_setup_tokens == rows[1].dictionary_setup_tokens
++    assert rows[10].dictionary_exposure_tokens == 10 * rows[1].dictionary_exposure_tokens
++    assert rows[10].candidate_protocol_exposure_tokens == 10 * rows[1].candidate_protocol_exposure_tokens
++    assert rows[10].lifecycle_cost_tokens - rows[1].lifecycle_cost_tokens == 9 * rows[1].per_use_cost_tokens
++
++
++def test_unknown_negotiation_and_unknown_dictionary_history_do_not_become_zero(api, monkeypatch):
++    cases = _cases(api, _fixture_records()[:1])
++    dictionary = _dictionary()
++    source = _scenario(
++        api, cases,
++        states={"json": api.ProtocolState(
++            candidate_id="json", profile_id=PROFILE_ID,
++            state="out_of_band_preinstalled", negotiation_required=True,
++        ), "ac1": api.ProtocolState(
++            candidate_id="ac1", profile_id=PROFILE_ID,
++            state="out_of_band_preinstalled", negotiation_required=True,
++            negotiation_text="Full synthetic capability negotiation text.",
++        )},
++    )
++    selected = _scenario(
++        api, cases, domain="selected_dictionary_transport", dictionary=dictionary,
++        dictionary_exposure=api.DictionaryExposure(
++            state="unknown_history", history_complete=False,
++        ),
++    )
++    report = _run(api, (source, selected), monkeypatch, dictionary=dictionary)
++    json_row = _row(_domain_report(report, "source"), candidate="json")
++    ac1_row = _row(_domain_report(report, "source"), candidate="ac1")
++    dictionary_row = _row(
++        _domain_report(report, "selected_dictionary_transport"), candidate="ac1_dictionary",
++    )
++
++    assert json_row.metric_status == "cannot_compare"
++    assert json_row.negotiation_tokens is None
++    assert json_row.lifecycle_cost_tokens is None
++    assert ac1_row.negotiation_tokens == len("Full synthetic capability negotiation text.".encode())
++    assert dictionary_row.metric_status == "cannot_compare"
++    assert dictionary_row.dictionary_history_tokens is None
++    assert dictionary_row.dictionary_setup_tokens is None
++    assert dictionary_row.lifecycle_cost_tokens is None
++
++
++def test_each_retry_and_fallback_history_event_is_counted_without_real_fallback(api, monkeypatch):
++    cases = _cases(api, _fixture_records()[:1])
++    history = (
++        _event("synthetic-retry-1", "retry", "retry", "synthetic retry attempt"),
++        _event("synthetic-fallback-1", "fallback", "fallback", "synthetic fallback record"),
++    )
++    scenario = _scenario(
++        api, cases,
++        states={"json": api.ProtocolState(
++            candidate_id="json", profile_id=PROFILE_ID,
++            state="ready_history", history=history,
++        )},
++    )
++    report = _run(api, (scenario,), monkeypatch)
++    row = _row(_domain_report(report, "source"), candidate="json")
++
++    assert row.retry_tokens == len("synthetic retry attempt".encode())
++    assert row.fallback_tokens == len("synthetic fallback record".encode())
++    assert row.event_count >= 4
++    assert row.strict_decode_status == "decoded"
++    assert "model" not in report.notes[1].lower() or "no model" in report.notes[1].lower()
++
++
++def test_unknown_direct_request_text_returns_null_not_zero(api, monkeypatch):
++    import agentcodec.agentwire.benchmark as benchmark_module
++
++    cases = _cases(api, _fixture_records()[:1])
++    real_builder = benchmark_module.build_direct_model_request
++
++    def unknown_freeform_request(context_prefix, candidate_id, wire_payload, dictionary=None):
++        if candidate_id == "natural_language_freeform":
++            raise ValueError("synthetic request text unavailable")
++        return real_builder(context_prefix, candidate_id, wire_payload, dictionary=dictionary)
++
++    monkeypatch.setattr(benchmark_module, "build_direct_model_request", unknown_freeform_request)
++    report = _run(api, (_scenario(api, cases),), monkeypatch)
++    direct = _row(_domain_report(report, "source"), candidate="natural_language_freeform", mode="model_direct")
++    gateway = _row(_domain_report(report, "source"), candidate="natural_language_freeform", mode="gateway")
++
++    assert direct.metric_status == "cannot_compare"
++    assert direct.transport_bytes is None
++    assert direct.model_input_tokens is None
++    assert direct.synthetic_response_tokens is None
++    assert direct.request_tokens is None
++    assert direct.lifecycle_cost_tokens is None
++    assert gateway.metric_status == "transport_only"
++    assert gateway.transport_bytes == len(cases[0].freeform_text.encode("utf-8"))
++
++
++def test_unknown_reuse_unit_is_not_assumed_to_be_one_or_a_corpus_pass(api, monkeypatch):
++    cases = _cases(api, _fixture_records()[:1])
++    scenario = _scenario(api, cases, unit="unknown-repeat-semantics")
++    report = _run(api, (scenario,), monkeypatch)
++    row = _row(_domain_report(report, "source"), candidate="json")
++
++    assert row.metric_status == "cannot_compare"
++    assert row.per_use_cost_tokens is None
++    assert row.amortized_cost_tokens is None
++    assert row.lifecycle_cost_tokens is None
++    assert row.vs_natural_language_labelled.status == "cannot_compare"
++
++
++def test_no_amortization_crosses_user_domain_profile_or_dictionary_identity(api, monkeypatch):
++    records_a = _fixture_records()[:1]
++    records_b = _fixture_records()[:1]
++    records_b[0]["source_message"]["user_id"] = "synthetic-user-b"
++    cases_a = _cases(api, records_a)
++    cases_b = _cases(api, records_b)
++    history = _event("same-synthetic-history-id", "setup", "setup", "complete isolated profile history")
++    state_a = api.ProtocolState(
++        candidate_id="json", profile_id=PROFILE_ID, state="ready_history", history=(history,),
++    )
++    second_profile_id = "synthetic-second-profile"
++    state_b = api.ProtocolState(
++        candidate_id="json", profile_id=second_profile_id, state="ready_history", history=(history,),
++    )
++    source_a = _scenario(api, cases_a, states={"json": state_a, "json-profile-b": state_b}, scope_id="shared-synthetic-scope")
++    # Use a second receiver/user and independently formed state with the same event ID.
++    source_b = _scenario(
++        api, cases_b, states={"json": state_a}, scope_id="shared-synthetic-scope",
++        receiver_user="synthetic-user-b",
++    )
++    dictionary = _dictionary()
++    selected = _scenario(
++        api, cases_a, domain="selected_dictionary_transport", dictionary=dictionary,
++        scope_id="shared-synthetic-scope",
++    )
++    profiles = {
++        PROFILE_ID: _profile(),
++        second_profile_id: TokenizerProfile(
++            encoding_name="synthetic-second-byte-count", library_version="0.0.synthetic-two",
++            vocabulary_sha256="1" * 64, accuracy="exact_local_text",
++            mapping_basis="test-only deterministic UTF-8 byte meter",
++        ),
++    }
++    report = _run(api, (source_a, source_b, selected), monkeypatch, dictionary=dictionary, profiles=profiles)
++    source_groups = [item for item in report.scenarios if item.metadata_domain == "source"]
++    assert len(source_groups) == 4
++    history_costs = [
++        _row(item, candidate="json", mode="gateway").candidate_protocol_setup_history_tokens
++        for item in source_groups
++        if any(row.candidate_id == "json" and row.metric_status != "not_applicable" for row in item.rows)
++    ]
++    expected_history = len("complete isolated profile history".encode())
++    assert history_costs.count(expected_history) == 3
++    assert history_costs.count(None) == 1
++    assert len({item.source_hash for item in report.scenarios}) == len(report.scenarios)
++    assert len({item.transport_hash for item in report.scenarios}) == len(report.scenarios)
++
++    dictionary_b = UserDictionary(
++        user_id=dictionary.user_id, version="synthetic-dictionary-v2",
++        aliases={"A": "A second synthetic phrase."},
++    )
++    selected_b = _scenario(
++        api, cases_a, domain="selected_dictionary_transport", dictionary=dictionary_b,
++        scope_id="shared-synthetic-scope",
++    )
++    report_b = _run(api, (selected_b,), monkeypatch, dictionary=dictionary_b, profiles={PROFILE_ID: _profile()})
++    selected_profile_a = next(
++        item for item in report.scenarios
++        if item.metadata_domain == "selected_dictionary_transport"
++        and any(row.tokenizer_profile_id == PROFILE_ID for row in item.rows)
++    )
++    assert report_b.scenarios[0].transport_hash != selected_profile_a.transport_hash
++
++
++def test_source_domain_rejects_dictionary_history_instead_of_borrowing_setup(api):
++    cases = _cases(api, _fixture_records()[:1])
++    history = _event("source-domain-dictionary-history", "dictionary_distribution", "dictionary_transfer", "synthetic dictionary text")
++    with pytest.raises(ValueError):
++        _scenario(
++            api, cases,
++            dictionary_exposure=api.DictionaryExposure(state="ready_history"),
++            dictionary_history=(history,),
++        )

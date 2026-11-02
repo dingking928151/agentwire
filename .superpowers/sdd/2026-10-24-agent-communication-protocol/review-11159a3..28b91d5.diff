@@ -1,0 +1,209 @@
+# Review package: 11159a34aaba28b51598ad1902fc66eb94e5dc7f..28b91d56bd093780612b12fa3c7ffe94873d0684
+
+## Commits
+28b91d5 fix: harden AgentWire result contracts
+
+## Files changed
+ src/agentcodec/agentwire/contracts.py | 32 ++++++++++++++++++++++++++--
+ tests/test_agentwire_contracts.py     | 40 +++++++++++++++++++++++++++++++----
+ 2 files changed, 66 insertions(+), 6 deletions(-)
+
+## Diff
+diff --git a/src/agentcodec/agentwire/contracts.py b/src/agentcodec/agentwire/contracts.py
+index df7b2c3..cc95710 100644
+--- a/src/agentcodec/agentwire/contracts.py
++++ b/src/agentcodec/agentwire/contracts.py
+@@ -1,20 +1,28 @@
+ """Strict, side-effect-free contracts for AgentWire v1."""
+ 
+ from __future__ import annotations
+ 
+ import copy
+ import hashlib
+ import json
+ from typing import Annotated, Literal, TypeAlias
+ 
+-from pydantic import BaseModel, ConfigDict, PositiveInt, StringConstraints, TypeAdapter, model_validator
++from pydantic import (
++    BaseModel,
++    ConfigDict,
++    PositiveInt,
++    StringConstraints,
++    TypeAdapter,
++    ValidationError,
++    model_validator,
++)
+ from agentcodec.schema import Identifier, MessageV1, UserDictionary
+ 
+ 
+ Sha256Hex: TypeAlias = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+ BenchmarkCandidate: TypeAlias = Literal[
+     "natural_language",
+     "natural_language_freeform",
+     "json",
+     "ac1",
+     "ac1_dictionary",
+@@ -109,20 +117,37 @@ class GatewayDelivery(_StrictFrozenModel):
+     def enforce_delivery_state(self) -> GatewayDelivery:
+         if self.decode_status == "decoded":
+             if (
+                 self.candidate_id == "natural_language_freeform"
+                 or self.model_context is None
+                 or not self.model_context
+                 or self.pass_through_text is not None
+                 or self.reason_code is not None
+             ):
+                 raise ValueError("decoded delivery fields are inconsistent")
++            try:
++                decoded_message = MessageV1.model_validate(
++                    json.loads(self.model_context), strict=True
++                )
++                canonical_context = json.dumps(
++                    decoded_message.model_dump(),
++                    ensure_ascii=False,
++                    separators=(",", ":"),
++                )
++            except (json.JSONDecodeError, TypeError, ValueError, ValidationError):
++                raise ValueError(
++                    "decoded model_context must be canonical MessageV1 JSON"
++                ) from None
++            if self.model_context != canonical_context:
++                raise ValueError(
++                    "decoded model_context must be canonical MessageV1 JSON"
++                )
+         elif self.decode_status == "fallback_required":
+             if (
+                 self.model_context is not None
+                 or self.pass_through_text is not None
+                 or self.reason_code is None
+             ):
+                 raise ValueError("fallback delivery must contain only a stable reason code")
+         elif (
+             self.candidate_id != "natural_language_freeform"
+             or self.model_context is not None
+@@ -130,21 +155,24 @@ class GatewayDelivery(_StrictFrozenModel):
+             or self.reason_code is not None
+         ):
+             raise ValueError("pass-through delivery fields are inconsistent")
+         return self
+ 
+ 
+ class AgentWireError(Exception):
+     """An error exposing only one stable, non-sensitive reason code."""
+ 
+     def __init__(self, reason_code: AgentWireReasonCode) -> None:
+-        validated = _REASON_CODE_ADAPTER.validate_python(reason_code, strict=True)
++        try:
++            validated = _REASON_CODE_ADAPTER.validate_python(reason_code, strict=True)
++        except ValidationError:
++            raise ValueError("invalid AgentWire reason code") from None
+         self.reason_code: AgentWireReasonCode = validated
+         super().__init__("agentwire operation rejected")
+ 
+ 
+ def dictionary_identity_for(dictionary: UserDictionary) -> DictionaryIdentity:
+     """Hash the full strict, recursively snapshotted UserDictionary content."""
+     snapshot = copy.deepcopy(dictionary.model_dump(warnings=False))
+     validated = UserDictionary.model_validate(snapshot, strict=True)
+     canonical = json.dumps(
+         validated.model_dump(),
+diff --git a/tests/test_agentwire_contracts.py b/tests/test_agentwire_contracts.py
+index f898ea3..828b032 100644
+--- a/tests/test_agentwire_contracts.py
++++ b/tests/test_agentwire_contracts.py
+@@ -1,14 +1,15 @@
+ """Synthetic-only tests for the public AgentWire v1 contracts."""
+ 
+ import hashlib
+ import importlib
++import json
+ from typing import get_args
+ 
+ import pytest
+ from pydantic import ValidationError
+ 
+ from agentcodec.schema import MessageV1, UserDictionary
+ 
+ 
+ @pytest.fixture
+ def contracts():
+@@ -161,28 +162,57 @@ def test_results_enforce_success_failure_invariants(contracts):
+         dict(status="decoded", message=message(), reason_code="invalid_message"),
+         dict(status="fallback_required", message=message(), reason_code="invalid_message"),
+         dict(status="fallback_required", message=None, reason_code=None),
+         dict(status="decoded", message=message(), reason_code="not_a_stable_code"),
+     ):
+         with pytest.raises(ValidationError):
+             contracts.GatewayResult(**values)
+ 
+ 
+ def test_gateway_delivery_enforces_decoded_fallback_and_pass_through_states(contracts):
++    valid_message = message()
++    canonical_context = json.dumps(
++        valid_message.model_dump(), ensure_ascii=False, separators=(",", ":")
++    )
+     decoded = contracts.GatewayDelivery(
+         candidate_id="awp1",
+         decode_status="decoded",
+-        model_context=message().model_dump_json(),
++        model_context=canonical_context,
+         pass_through_text=None,
+         reason_code=None,
+     )
+-    assert decoded.model_context
++    assert decoded.model_context == canonical_context
++
++    noncanonical_contexts = (
++        "not JSON",
++        "{}",
++        json.dumps(
++            valid_message.model_dump() | {"status": "not-a-message-status"},
++            ensure_ascii=False,
++            separators=(",", ":"),
++        ),
++        json.dumps(valid_message.model_dump(), ensure_ascii=False, separators=(", ", ": ")),
++        json.dumps(
++            dict(reversed(list(valid_message.model_dump().items()))),
++            ensure_ascii=False,
++            separators=(",", ":"),
++        ),
++    )
++    for context in noncanonical_contexts:
++        with pytest.raises(ValidationError):
++            contracts.GatewayDelivery(
++                candidate_id="awp1",
++                decode_status="decoded",
++                model_context=context,
++                pass_through_text=None,
++                reason_code=None,
++            )
+ 
+     fallback = contracts.GatewayDelivery(
+         candidate_id="json",
+         decode_status="fallback_required",
+         model_context=None,
+         pass_through_text=None,
+         reason_code="invalid_envelope",
+     )
+     assert fallback.reason_code == "invalid_envelope"
+ 
+@@ -238,15 +268,17 @@ def test_public_exports_and_agentwire_error_are_stable_and_nonrevealing(contract
+     }
+     assert set(get_args(contracts.AgentWireReasonCode)) == {
+         "unsupported_profile", "unsupported_schema", "unsupported_enum_table",
+         "receiver_user_mismatch", "message_too_large", "invalid_envelope", "unknown_enum",
+         "dictionary_missing", "dictionary_identity_mismatch", "unknown_alias", "invalid_message",
+     }
+ 
+     error = contracts.AgentWireError("invalid_message")
+     assert error.reason_code == "invalid_message"
+     assert str(error) == "agentwire operation rejected"
+-    with pytest.raises((ValidationError, ValueError, TypeError)):
+-        contracts.AgentWireError("sensitive user text")
++    sentinel = "SENSITIVE_SENTINEL_TEST"
++    with pytest.raises((ValidationError, ValueError, TypeError)) as exc_info:
++        contracts.AgentWireError(sentinel)
++    assert sentinel not in str(exc_info.value)
+ 
+     with pytest.raises(ValidationError):
+         contracts.DictionaryIdentity(**identity_values(sha256="g" * 64))

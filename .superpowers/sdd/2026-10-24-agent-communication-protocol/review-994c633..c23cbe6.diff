@@ -1,0 +1,102 @@
+# Review package: 994c6337ce74796c1cd751b3174eec96072512e6..c23cbe654ceedcc73e3fce6d22bd5691f7d9c383
+
+## Commits
+c23cbe6 fix: reject AgentWire cost events without parts
+
+## Files changed
+ src/agentcodec/agentwire/contracts.py |  2 +-
+ tests/test_agentwire_costs.py         | 25 +++++++++++++++++++++++++
+ 2 files changed, 26 insertions(+), 1 deletion(-)
+
+## Diff
+diff --git a/src/agentcodec/agentwire/contracts.py b/src/agentcodec/agentwire/contracts.py
+index 5475952..ced92a2 100644
+--- a/src/agentcodec/agentwire/contracts.py
++++ b/src/agentcodec/agentwire/contracts.py
+@@ -221,21 +221,21 @@ def dictionary_identity_for(dictionary: UserDictionary) -> DictionaryIdentity:
+ class CostPart(_StrictFrozenModel):
+     label: CostPartLabel
+     text: UnicodeText
+ 
+ 
+ class CostEvent(_StrictFrozenModel):
+     event_id: Identifier
+     kind: CostEventKind
+     simulated: Literal[True] = True
+     surfaces: tuple[CostSurface, ...]
+-    parts: tuple[CostPart, ...]
++    parts: Annotated[tuple[CostPart, ...], Field(min_length=1)]
+     multiplicity: PositiveInt = 1
+ 
+     @model_validator(mode="after")
+     def require_distinct_surfaces(self) -> CostEvent:
+         if not self.surfaces or len(set(self.surfaces)) != len(self.surfaces):
+             raise ValueError("cost event surfaces must be nonempty and distinct")
+         return self
+ 
+ 
+ class CostSummary(_StrictFrozenModel):
+diff --git a/tests/test_agentwire_costs.py b/tests/test_agentwire_costs.py
+index 9d6b942..d605a01 100644
+--- a/tests/test_agentwire_costs.py
++++ b/tests/test_agentwire_costs.py
+@@ -200,34 +200,59 @@ def test_same_id_with_changed_text_or_surface_is_rejected(api, monkeypatch):
+     changed_surface = event("same-event", "request", ("model_input",), part("payload", "literal text"))
+     calls = stub_meter(monkeypatch, {"same-event": (2, (2,))})
+ 
+     with pytest.raises(FallbackRequired):
+         api.measure_cost_events((original, changed_text), profile())
+     with pytest.raises(FallbackRequired):
+         api.measure_cost_events((original, changed_surface), profile())
+     assert calls == []
+ 
+ 
++def test_cost_event_rejects_missing_parts_but_allows_explicit_empty_text(api, monkeypatch):
++    with pytest.raises(ValidationError):
++        event("missing-parts", "request", ("transport",))
++
++    explicit_empty = event(
++        "explicit-empty-text", "request", ("transport",), part("payload", ""),
++    )
++    calls = stub_meter(monkeypatch, {"explicit-empty-text": (0, (0,))})
++    result = api.measure_cost_events((explicit_empty,), profile())
++
++    assert result.status == "exact_local_text"
++    assert result.distinct_text_event_tokens == 0
++    assert len(calls[0][0]) == 1
++    assert len(calls[0][0][0].components) == 1
++    assert calls[0][0][0].components[0].text == ""
++
++
+ def test_break_even_is_reported_separately_for_each_baseline(api):
+     labelled = api.calculate_break_even(30, 5, 100, 20)
+     freeform = api.calculate_break_even(30, 5, 0, 20)
+     equal_cost = api.calculate_break_even(10, 20, 10, 20)
+     delayed = api.calculate_break_even(100, 1, 0, 20)
+     never = api.calculate_break_even(10, 21, 0, 20)
+ 
+     assert (labelled.status, labelled.first_strict_win) == ("finite", 1)
+     assert (freeform.status, freeform.first_strict_win) == ("finite", 3)
+     assert (equal_cost.status, equal_cost.first_strict_win) == ("never", None)
+     assert (delayed.status, delayed.first_strict_win) == ("finite", 6)
+     assert (never.status, never.first_strict_win) == ("never", None)
+ 
+ 
++def test_break_even_unknown_cost_returns_cannot_compare_without_threshold(api):
++    result = api.calculate_break_even(None, 5, 0, 20)
++
++    assert result.status == "cannot_compare"
++    assert result.first_strict_win is None
++    assert result.reason_code == "required_cost_unknown"
++
++
+ def test_negative_costs_and_zero_reuse_are_rejected(api):
+     with pytest.raises((ValueError, FallbackRequired)):
+         api.calculate_break_even(-1, 0, 0, 0)
+     with pytest.raises(ValidationError):
+         event("zero-reuse", "request", ("transport",), part("payload", "x"), multiplicity=0)
+ 
+ 
+ def test_missing_tokenizer_returns_cannot_compare_not_zero(api, monkeypatch):
+     request = event("unknown-request", "request", ("transport", "model_input"), part("payload", "x"))
+     calls = stub_meter(monkeypatch, {"unknown-request": (1, (1,))})

@@ -1,0 +1,593 @@
+# Review package: fedf0c422a08721b9241bc4a32eedf243a89d469..HEAD
+
+## Commits
+e700ad5 feat: add AgentWire benchmark CLI
+
+## Files changed
+ src/agentcodec/cli.py       | 257 +++++++++++++++++++++++++++++++++++++++
+ tests/test_agentwire_cli.py | 286 ++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 543 insertions(+)
+
+## Diff
+diff --git a/src/agentcodec/cli.py b/src/agentcodec/cli.py
+index 2472bcd..f6e4142 100644
+--- a/src/agentcodec/cli.py
++++ b/src/agentcodec/cli.py
+@@ -1,15 +1,16 @@
+ """Offline file/stdin CLI. Messages are untrusted data, never actions."""
+ 
+ import hashlib
+ import json
+ import os
++import stat
+ import subprocess
+ import sys
+ from contextlib import contextmanager
+ from enum import Enum
+ from pathlib import Path
+ from typing import Annotated
+ 
+ import typer
+ 
+ from .ac2 import encode_message_ac2
+@@ -301,12 +302,268 @@ def select_encoding_cli(
+ @app.command("benchmark-adaptive", cls=AdaptiveCommand)
+ def benchmark_adaptive_cli(
+     config: Annotated[Path, typer.Option("--config")],
+     output_dir: Annotated[Path, typer.Option("--output-dir")],
+ ):
+     """Write independent local diagnostics, not model or provider evidence."""
+     from .adaptive.cli import benchmark_adaptive_command
+     benchmark_adaptive_command(config, output_dir)
+ 
+ 
++_AGENTWIRE_FIXTURE_MANIFEST_ID = "agentwire-synthetic-fixtures-v1"
++_AGENTWIRE_TOKENIZERS = ("o200k_base", "cl100k_base")
++_AGENTWIRE_MODES = ("gateway", "model_direct")
++_AGENTWIRE_CANDIDATES = (
++    "natural_language", "natural_language_freeform", "json", "ac1",
++    "ac1_dictionary", "ac2", "ac2_dictionary", "awp1", "awp1_dictionary",
++)
++_AGENTWIRE_REUSE_COUNTS = (1, 10, 50)
++
++
++def _agentwire_csv(value: str, allowed: tuple[str, ...], option: str) -> tuple[str, ...]:
++    parts = value.split(",")
++    if (not value or any(part not in allowed for part in parts)
++            or len(parts) != len(set(parts))):
++        raise typer.BadParameter("select unique supported values", param_hint=option)
++    return tuple(parts)
++
++
++def _agentwire_reuse_counts(value: str, option: str) -> tuple[int, ...]:
++    parts = value.split(",")
++    allowed = tuple(str(count) for count in _AGENTWIRE_REUSE_COUNTS)
++    if (not value or any(part not in allowed for part in parts)
++            or len(parts) != len(set(parts))):
++        raise typer.BadParameter("select unique counts from 1, 10, 50", param_hint=option)
++    return tuple(int(part) for part in parts)
++
++
++def _agentwire_output_preflight(output_dir: Path) -> Path:
++    """Accept only an absent or empty real directory outside fixed inputs."""
++    output_dir = Path(os.path.abspath(os.fspath(output_dir)))
++    if any(path.is_symlink() for path in (output_dir, *output_dir.parents)):
++        raise ValueError("invalid output directory")
++    fixture_dir = Path(__file__).resolve().parents[2] / "bench" / "agentwire"
++    resolved = output_dir.resolve(strict=False)
++    fixture_dir = fixture_dir.resolve()
++    if resolved == fixture_dir or resolved in fixture_dir.parents or fixture_dir in resolved.parents:
++        raise ValueError("output directory collides with fixed fixtures")
++    try:
++        info = output_dir.lstat()
++    except FileNotFoundError:
++        info = None
++    if info is not None:
++        if not stat.S_ISDIR(info.st_mode) or any(output_dir.iterdir()):
++            raise ValueError("output directory must be new or empty")
++        writable_parent = output_dir
++    else:
++        writable_parent = output_dir.parent
++        if not writable_parent.is_dir():
++            raise ValueError("output directory parent must exist")
++    if not os.access(writable_parent, os.W_OK | os.X_OK):
++        raise OSError("output directory is not writable")
++    return output_dir
++
++
++def _agentwire_write(output_dir: Path, contents: bytes) -> None:
++    output_dir = _agentwire_output_preflight(output_dir)
++    created_directory = False
++    directory_identity = None
++    report_path = output_dir / "report.json"
++    file_identity = None
++    try:
++        if not output_dir.exists():
++            output_dir.mkdir()
++            directory_stat = output_dir.lstat()
++            directory_identity = (directory_stat.st_dev, directory_stat.st_ino)
++            created_directory = True
++        _agentwire_output_preflight(output_dir)
++        with report_path.open("xb") as stream:
++            file_stat = os.fstat(stream.fileno())
++            file_identity = (file_stat.st_dev, file_stat.st_ino)
++            if stream.write(contents) != len(contents):
++                raise OSError("incomplete report write")
++            stream.flush()
++            os.fsync(stream.fileno())
++    except BaseException:
++        if file_identity is not None:
++            try:
++                current = report_path.lstat()
++                if (current.st_dev, current.st_ino) == file_identity:
++                    report_path.unlink()
++            except OSError:
++                pass
++        if created_directory:
++            try:
++                current = output_dir.lstat()
++                if ((current.st_dev, current.st_ino) == directory_identity
++                        and not any(output_dir.iterdir())):
++                    output_dir.rmdir()
++            except OSError:
++                pass
++        raise
++
++
++def _agentwire_fixed_inputs():
++    from .agentwire.benchmark import BenchmarkCase
++    from .schema import MessageV1, UserDictionary
++
++    fixture_dir = Path(__file__).resolve().parents[2] / "bench" / "agentwire"
++    exchanges_path = fixture_dir / "exchanges.v1.jsonl"
++    dictionary_path = fixture_dir / "dictionary.v1.json"
++    exchanges_text = exchanges_path.read_bytes().decode("utf-8")
++    dictionary_text = dictionary_path.read_bytes().decode("utf-8")
++    cases = []
++    for line in exchanges_text.split("\n"):
++        if not line.strip():
++            continue
++        record = json.loads(line, object_pairs_hook=_unique_object)
++        cases.append(BenchmarkCase(
++            case_id=record["case_id"],
++            task_prompt=record["task_prompt"],
++            source_message=MessageV1.model_validate(record["source_message"], strict=True),
++            freeform_text=record["freeform_text"],
++            freeform_annotations={key: tuple(items)
++                                  for key, items in record["freeform_annotations"].items()},
++            synthetic_response_fixture=record["synthetic_response_fixture"],
++        ))
++    if not cases:
++        raise ValueError("fixed benchmark fixtures rejected")
++    dictionary = UserDictionary.model_validate(
++        json.loads(dictionary_text, object_pairs_hook=_unique_object), strict=True,
++    )
++    user_ids = {case.source_message.user_id for case in cases}
++    if len(user_ids) != 1 or dictionary.user_id not in user_ids:
++        raise ValueError("fixed benchmark fixtures rejected")
++    return tuple(cases), dictionary
++
++
++def _agentwire_profiles(tokenizer_names: tuple[str, ...]):
++    from importlib.metadata import PackageNotFoundError, version
++
++    from .adaptive.contracts import TokenizerProfile
++    from .benchmark import _VOCAB_HASHES
++
++    try:
++        library_version = version("tiktoken")
++    except PackageNotFoundError:
++        # The meter will report cannot_compare; profile construction must not fetch anything.
++        library_version = "unavailable"
++    return {
++        name: TokenizerProfile(
++            encoding_name=name,
++            library_version=library_version,
++            vocabulary_sha256=_VOCAB_HASHES[name],
++            accuracy="exact_local_text",
++            mapping_basis="verified fixed local tokenizer vocabulary only",
++        )
++        for name in tokenizer_names
++    }
++
++
++def _agentwire_scenarios(cases, dictionary, tokenizer_names: tuple[str, ...]):
++    from .agentwire.benchmark import (
++        BenchmarkScenario, DictionaryExposure, ProtocolState, ReuseScenario,
++    )
++    from .agentwire.contracts import ReceiverCapabilities, dictionary_identity_for
++
++    dictionary_identity = dictionary_identity_for(dictionary)
++    user_id = cases[0].source_message.user_id
++    scenarios = []
++    for domain in ("source", "selected_dictionary_transport"):
++        for unit in ("same_message_instance", "whole_corpus_pass"):
++            groups = (
++                tuple((index, (case,)) for index, case in enumerate(cases, start=1))
++                if unit == "same_message_instance" else ((0, cases),)
++            )
++            for ordinal, group in groups:
++                receiver = ReceiverCapabilities(
++                    user_id=user_id,
++                    supported_profile_versions=("AWP1",),
++                    supported_schema_versions=("MessageV1",),
++                    supported_enum_table_versions=("AWP1",),
++                    max_message_bytes=2_000_000,
++                    dictionary_identity=(dictionary_identity
++                                         if domain == "selected_dictionary_transport" else None),
++                )
++                states = tuple(
++                    ProtocolState(
++                        candidate_id=candidate,
++                        profile_id=profile_id,
++                        state="out_of_band_preinstalled",
++                    )
++                    for profile_id in tokenizer_names
++                    for candidate in _AGENTWIRE_CANDIDATES
++                )
++                scenarios.append(BenchmarkScenario(
++                    scenario_id=f"agentwire-{domain}-{unit}-{ordinal:03d}",
++                    scope_id="agentwire-cli-scope-v1",
++                    corpus_id="agentwire-exchanges-v1",
++                    metadata_domain=domain,
++                    receiver_capabilities=receiver,
++                    protocol_states=states,
++                    dictionary_candidate_exposure=DictionaryExposure(
++                        state=("out_of_band_preinstalled"
++                               if domain == "selected_dictionary_transport" else "not_applicable"),
++                    ),
++                    dictionary_history=(),
++                    cases=group,
++                    reuse=ReuseScenario(unit=unit, total_uses=_AGENTWIRE_REUSE_COUNTS),
++                ))
++    return tuple(scenarios)
++
++
++def _agentwire_redacted_report(report, tokenizer_names, instance_uses, corpus_passes, modes):
++    data = report.model_dump(mode="json")
++    filtered_scenarios = []
++    for scenario in data["scenarios"]:
++        reuse_counts = instance_uses if scenario["reuse_unit"] == "same_message_instance" else corpus_passes
++        scenario["rows"] = [
++            row for row in scenario["rows"]
++            if (row["tokenizer_profile_id"] in tokenizer_names
++                and row["receiver_mode"] in modes
++                and row["total_uses"] in reuse_counts)
++        ]
++        filtered_scenarios.append(scenario)
++    return {
++        "version": data["version"],
++        "fixture_manifest_id": _AGENTWIRE_FIXTURE_MANIFEST_ID,
++        "scenarios": filtered_scenarios,
++        "notes": data["notes"],
++    }
++
++
++@app.command("benchmark-agentwire")
++def benchmark_agentwire_cli(
++    output_dir: Annotated[Path, typer.Option("--output-dir", help="New or empty local report directory.")],
++    tokenizers: Annotated[str, typer.Option("--tokenizers", help="Comma-separated o200k_base,cl100k_base.")] = "o200k_base,cl100k_base",
++    instance_uses: Annotated[str, typer.Option("--instance-uses", help="Reuse counts for one message instance: 1,10,50.")] = "1,10,50",
++    corpus_passes: Annotated[str, typer.Option("--corpus-passes", help="Reuse counts for a whole corpus pass: 1,10,50.")] = "1,10,50",
++    modes: Annotated[str, typer.Option("--modes", help="Comma-separated gateway,model_direct.")] = "gateway,model_direct",
++):
++    """Run the fixed synthetic AgentWire benchmark locally; never contacts a provider."""
++    tokenizer_names = _agentwire_csv(tokenizers, _AGENTWIRE_TOKENIZERS, "--tokenizers")
++    selected_modes = _agentwire_csv(modes, _AGENTWIRE_MODES, "--modes")
++    instance_counts = _agentwire_reuse_counts(instance_uses, "--instance-uses")
++    corpus_counts = _agentwire_reuse_counts(corpus_passes, "--corpus-passes")
++    try:
++        _agentwire_output_preflight(output_dir)
++        cases, dictionary = _agentwire_fixed_inputs()
++        profiles = _agentwire_profiles(tokenizer_names)
++        scenarios = _agentwire_scenarios(cases, dictionary, tokenizer_names)
++        from .agentwire.benchmark import run_agentwire_benchmark
++
++        report = run_agentwire_benchmark(scenarios, profiles, dictionary=dictionary)
++        public = _agentwire_redacted_report(
++            report, tokenizer_names, instance_counts, corpus_counts, selected_modes,
++        )
++        contents = (json.dumps(public, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8")
++        _agentwire_write(output_dir, contents)
++    except OSError:
++        typer.echo("agentwire_benchmark_io_error", err=True)
++        raise typer.Exit(code=1) from None
++    except (FallbackRequired, ValueError, TypeError, KeyError, RuntimeError, ImportError, RecursionError):
++        typer.echo("agentwire_benchmark_failed", err=True)
++        raise typer.Exit(code=1) from None
++
++
+ if __name__ == "__main__":
+     app()
+diff --git a/tests/test_agentwire_cli.py b/tests/test_agentwire_cli.py
+new file mode 100644
+index 0000000..6cbfee3
+--- /dev/null
++++ b/tests/test_agentwire_cli.py
+@@ -0,0 +1,286 @@
++"""Opt-in AgentWire CLI tests over the fixed synthetic fixtures only."""
++
++import importlib
++import json
++import os
++from pathlib import Path
++import socket
++import subprocess
++import sys
++
++import pytest
++from typer.testing import CliRunner
++
++ROOT = Path(__file__).resolve().parents[1]
++FIXTURE_DIR = ROOT / "bench" / "agentwire"
++RUNNER = CliRunner()
++FIXTURE_MANIFEST_ID = "agentwire-synthetic-fixtures-v1"
++
++
++@pytest.fixture
++def app():
++    return importlib.import_module("agentcodec.cli").app
++
++
++def invoke(app, args):
++    return RUNNER.invoke(app, ["benchmark-agentwire", *args])
++
++
++def _fake_report():
++    return {
++        "version": "agentwire-benchmark-v1",
++        "scenarios": [
++            {
++                "metadata_domain": domain,
++                "reuse_unit": unit,
++                "source_hash": "a" * 64,
++                "transport_hash": "b" * 64,
++                "hash_basis": "opaque namespace identifiers only; not message or payload content",
++                "rows": [
++                    {
++                        "tokenizer_profile_id": profile,
++                        "receiver_mode": mode,
++                        "total_uses": count,
++                        "metric_status": "cannot_compare",
++                    }
++                    for profile in ("o200k_base", "cl100k_base")
++                    for mode in ("model_direct", "gateway")
++                    for count in (1, 10, 50)
++                ],
++            }
++            for domain in ("source", "selected_dictionary_transport")
++            for unit in ("same_message_instance", "whole_corpus_pass")
++        ],
++        "notes": ["synthetic fixture report"],
++    }
++
++
++def _stub_runner(monkeypatch, captured=None):
++    benchmark = importlib.import_module("agentcodec.agentwire.benchmark")
++
++    class Report:
++        def model_dump(self, *, mode):
++            assert mode == "json"
++            return _fake_report()
++
++    def run(scenarios, profiles, dictionary=None):
++        if captured is not None:
++            captured.append((scenarios, profiles, dictionary))
++        return Report()
++
++    monkeypatch.setattr(benchmark, "run_agentwire_benchmark", run)
++
++
++def test_benchmark_agentwire_writes_versioned_report(app, tmp_path, monkeypatch):
++    def forbidden(*args, **kwargs):
++        pytest.fail("AgentWire CLI attempted network access")
++
++    monkeypatch.setenv("TIKTOKEN_CACHE_DIR", str(tmp_path / "absent-tokenizer-cache"))
++    monkeypatch.setattr(socket.socket, "connect", forbidden)
++    monkeypatch.setattr(socket, "create_connection", forbidden)
++    output_dir = tmp_path / "report"
++    result = invoke(app, ["--output-dir", str(output_dir)])
++
++    assert result.exit_code == 0, result.output
++    assert result.stdout == ""
++    assert result.stderr == ""
++    assert {path.name for path in output_dir.iterdir()} == {"report.json"}
++    raw = (output_dir / "report.json").read_text(encoding="utf-8")
++    report = json.loads(raw)
++    assert report["version"] == "agentwire-benchmark-v1"
++    assert report["fixture_manifest_id"] == FIXTURE_MANIFEST_ID
++    assert set(report) == {"version", "fixture_manifest_id", "scenarios", "notes"}
++    assert {item["metadata_domain"] for item in report["scenarios"]} == {
++        "source", "selected_dictionary_transport",
++    }
++    assert {item["reuse_unit"] for item in report["scenarios"]} == {
++        "same_message_instance", "whole_corpus_pass",
++    }
++    rows = [row for item in report["scenarios"] for row in item["rows"]]
++    assert {row["receiver_mode"] for row in rows} == {"gateway", "model_direct"}
++    assert {row["total_uses"] for row in rows} == {1, 10, 50}
++    assert {row["tokenizer_profile_id"] for row in rows} == {"o200k_base", "cl100k_base"}
++    assert {row["metric_status"] for row in rows} <= {"cannot_compare", "not_applicable"}
++    assert any(row["metric_status"] == "cannot_compare" for row in rows)
++    assert str(ROOT) not in raw
++    assert "exchanges.v1.jsonl" not in raw
++    assert "dictionary.v1.json" not in raw
++    assert all("payload" not in key.lower() and "message" not in key.lower()
++               for item in report["scenarios"] for row in item["rows"] for key in row)
++
++
++def test_cli_import_has_no_tokenizer_or_network_side_effect():
++    script = r'''\
++import os, socket, sys
++fixture_paths = {
++    os.path.realpath(os.path.join(os.getcwd(), "bench", "agentwire", name))
++    for name in ("exchanges.v1.jsonl", "dictionary.v1.json")
++}
++def blocked(*args, **kwargs):
++    raise AssertionError("network access during CLI import")
++socket.socket.connect = blocked
++socket.create_connection = blocked
++def audit(event, args):
++    if event == "open" and args:
++        try:
++            candidate = os.path.realpath(os.fspath(args[0]))
++        except (TypeError, ValueError):
++            return
++        if candidate in fixture_paths:
++            raise AssertionError("fixed benchmark fixture read during CLI import")
++sys.addaudithook(audit)
++import agentcodec.cli
++assert "tiktoken" not in sys.modules
++assert "agentcodec.agentwire.benchmark" not in sys.modules
++'''
++    env = os.environ.copy()
++    env["PYTHONPATH"] = str(ROOT / "src") + os.pathsep + env.get("PYTHONPATH", "")
++    result = subprocess.run(
++        [sys.executable, "-c", script], cwd=ROOT, env=env,
++        capture_output=True, text=True, check=False,
++    )
++    assert result.returncode == 0, result.stderr
++    assert result.stdout == ""
++
++
++def test_cli_uses_only_fixed_synthetic_fixtures(app, tmp_path, monkeypatch):
++    captured = []
++    _stub_runner(monkeypatch, captured)
++    reads = []
++    original_read_bytes = Path.read_bytes
++    original_read_text = Path.read_text
++
++    def tracked_read_bytes(path):
++        if path.parent == FIXTURE_DIR:
++            reads.append(path.name)
++        return original_read_bytes(path)
++
++    def tracked_read_text(path, *args, **kwargs):
++        if path.parent == FIXTURE_DIR:
++            reads.append(path.name)
++        return original_read_text(path, *args, **kwargs)
++
++    monkeypatch.setattr(Path, "read_bytes", tracked_read_bytes)
++    monkeypatch.setattr(Path, "read_text", tracked_read_text)
++    help_result = invoke(app, ["--help"])
++    assert help_result.exit_code == 0, help_result.output
++    assert "--output-dir" in help_result.stdout
++    assert "--tokenizers" in help_result.stdout
++    assert "--instance-uses" in help_result.stdout
++    assert "--corpus-passes" in help_result.stdout
++    assert "--modes" in help_result.stdout
++    assert "--input" not in help_result.stdout
++    assert "--dictionary" not in help_result.stdout
++
++    output_dir = tmp_path / "fixed"
++    result = invoke(app, [
++        "--output-dir", str(output_dir), "--tokenizers", "cl100k_base",
++        "--instance-uses", "1", "--corpus-passes", "1", "--modes", "gateway",
++    ])
++    assert result.exit_code == 0, result.output
++    assert sorted(reads) == ["dictionary.v1.json", "exchanges.v1.jsonl"]
++    assert len(captured) == 1
++    assert captured[0][2] is not None
++    report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
++    assert report["fixture_manifest_id"] == FIXTURE_MANIFEST_ID
++    assert str(ROOT) not in json.dumps(report)
++
++
++def test_reuse_options_remain_separate(app, tmp_path, monkeypatch):
++    captured = []
++    _stub_runner(monkeypatch, captured)
++    output_dir = tmp_path / "separate-reuse"
++    result = invoke(app, [
++        "--output-dir", str(output_dir), "--tokenizers", "cl100k_base",
++        "--instance-uses", "10", "--corpus-passes", "50", "--modes", "gateway",
++    ])
++
++    assert result.exit_code == 0, result.output
++    assert len(captured) == 1
++    scenarios, profiles, _ = captured[0]
++    assert set(profiles) == {"cl100k_base"}
++    assert {scenario.reuse.unit for scenario in scenarios} == {
++        "same_message_instance", "whole_corpus_pass",
++    }
++    assert all(scenario.reuse.total_uses == (1, 10, 50) for scenario in scenarios)
++    report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
++    for scenario in report["scenarios"]:
++        wanted = {10} if scenario["reuse_unit"] == "same_message_instance" else {50}
++        assert {row["total_uses"] for row in scenario["rows"]} == wanted
++        assert {row["receiver_mode"] for row in scenario["rows"]} == {"gateway"}
++        assert {row["tokenizer_profile_id"] for row in scenario["rows"]} == {"cl100k_base"}
++
++
++@pytest.mark.parametrize("args", [
++    ["--input", "caller.jsonl"],
++    ["--dictionary", "caller.json"],
++    ["--instance-uses", "0"],
++    ["--instance-uses", "51"],
++    ["--instance-uses", "1,2"],
++    ["--corpus-passes", "-1"],
++    ["--corpus-passes", "10,10"],
++    ["--tokenizers", "remote-model"],
++    ["--modes", "provider"],
++])
++def test_unknown_options_and_invalid_reuse_fail_closed(app, tmp_path, args):
++    output_dir = tmp_path / "must-not-exist"
++    result = invoke(app, ["--output-dir", str(output_dir), *args])
++    assert result.exit_code != 0
++    assert not output_dir.exists()
++    assert "Traceback" not in result.stderr
++
++
++def test_output_path_must_be_new_empty_directory(app, tmp_path, monkeypatch):
++    _stub_runner(monkeypatch)
++
++    empty = tmp_path / "empty"
++    empty.mkdir()
++    accepted = invoke(app, ["--output-dir", str(empty), "--tokenizers", "cl100k_base",
++                            "--instance-uses", "1", "--corpus-passes", "1", "--modes", "gateway"])
++    assert accepted.exit_code == 0, accepted.output
++    assert {path.name for path in empty.iterdir()} == {"report.json"}
++
++    nonempty = tmp_path / "nonempty"
++    nonempty.mkdir()
++    sentinel = nonempty / "keep.txt"
++    sentinel.write_text("keep", encoding="utf-8")
++    file_collision = FIXTURE_DIR / "exchanges.v1.jsonl"
++    link = tmp_path / "link"
++    link.symlink_to(tmp_path, target_is_directory=True)
++    special = tmp_path / "pipe"
++    os.mkfifo(special)
++
++    for path in (nonempty, file_collision, link, special):
++        result = invoke(app, ["--output-dir", str(path), "--tokenizers", "cl100k_base",
++                              "--instance-uses", "1", "--corpus-passes", "1", "--modes", "gateway"])
++        assert result.exit_code != 0
++        assert "Traceback" not in result.stderr
++        assert "report.json" not in {child.name for child in path.iterdir()} if path == nonempty else True
++    assert sentinel.read_text(encoding="utf-8") == "keep"
++    assert not (tmp_path / "report.json").exists()
++
++
++def test_missing_local_tokenizer_never_downloads(app, tmp_path, monkeypatch):
++    from agentcodec.adaptive import meter
++
++    def missing(*args, **kwargs):
++        raise meter.MeasurementUnavailable("tokenizer_unavailable")
++
++    def forbidden(*args, **kwargs):
++        pytest.fail("AgentWire CLI attempted network access")
++
++    monkeypatch.setattr(meter, "_read_vocabulary", missing)
++    monkeypatch.setattr(socket.socket, "connect", forbidden)
++    monkeypatch.setattr(socket, "create_connection", forbidden)
++    output_dir = tmp_path / "no-tokenizer"
++    result = invoke(app, [
++        "--output-dir", str(output_dir), "--tokenizers", "cl100k_base",
++        "--instance-uses", "1", "--corpus-passes", "1", "--modes", "gateway",
++    ])
++
++    assert result.exit_code == 0, result.output
++    report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
++    statuses = {row["metric_status"] for scenario in report["scenarios"] for row in scenario["rows"]}
++    assert "cannot_compare" in statuses
++    assert statuses <= {"cannot_compare", "not_applicable"}
++    assert result.stdout == ""

@@ -1,0 +1,296 @@
+# Review package: b2058d98811b3b56f191dd3b8c27c3076a06a1bf..fedf0c422a08721b9241bc4a32eedf243a89d469
+
+## Commits
+fedf0c4 fix: fail closed on incomplete AgentWire costs
+
+## Files changed
+ src/agentcodec/agentwire/benchmark.py | 41 ++++++++++++-----
+ tests/test_agentwire_benchmark.py     | 84 +++++++++++++++++++++++++++++++++++
+ 2 files changed, 113 insertions(+), 12 deletions(-)
+
+## Diff
+diff --git a/src/agentcodec/agentwire/benchmark.py b/src/agentcodec/agentwire/benchmark.py
+index 4e98722..5b1c427 100644
+--- a/src/agentcodec/agentwire/benchmark.py
++++ b/src/agentcodec/agentwire/benchmark.py
+@@ -480,37 +480,31 @@ def _not_applicable_row(
+ def _has_incomplete_state(
+     state: ProtocolState | None,
+     scenario: BenchmarkScenario,
+     candidate: BenchmarkCandidate,
+ ) -> tuple[bool, bool, bool]:
+     """Return (protocol unknown, dictionary unknown, missing known text)."""
+     if state is None:
+         protocol_unknown = True
+         unknown_text = False
+     else:
+-        protocol_unknown = (
+-            state.state == "unknown_history"
+-            or (state.state == "ready_history" and not state.history_complete)
+-        )
++        protocol_unknown = state.state == "unknown_history" or not state.history_complete
+         unknown_text = (
+             (state.state == "cold_text_setup" and state.setup_text is None)
+             or (state.negotiation_required and state.negotiation_text is None)
+         )
+     dictionary_candidate = candidate in _DICTIONARY_CANDIDATES
+     if not dictionary_candidate or scenario.metadata_domain != "selected_dictionary_transport":
+         dictionary_unknown = False
+     else:
+         exposure = scenario.dictionary_candidate_exposure
+-        dictionary_unknown = (
+-            exposure.state == "unknown_history"
+-            or (exposure.state == "ready_history" and not exposure.history_complete)
+-        )
++        dictionary_unknown = exposure.state == "unknown_history" or not exposure.history_complete
+         unknown_text = unknown_text or (
+             exposure.state == "cold_text_setup" and exposure.setup_text is None
+         )
+     return protocol_unknown, dictionary_unknown, unknown_text
+ 
+ 
+ def _measure_group(events: list[CostEvent], profile: TokenizerProfile | None) -> int | None:
+     if not events:
+         return 0
+     summary = measure_cost_events(tuple(events), profile)
+@@ -717,29 +711,35 @@ def _make_candidate_metrics(
+                 tagged["current_response"].append(response_event)
+                 all_events.extend((context_event, response_event))
+ 
+     try:
+         summary = measure_cost_events(tuple(all_events), profile)
+     except (TypeError, ValueError, RecursionError):
+         summary = None
+         unknown_text = True
+ 
+     profile_known = summary is not None and summary.status == "exact_local_text"
++    gateway_decode_incomplete = (
++        mode == "gateway" and candidate != "natural_language_freeform"
++        and strict_successes != len(scenario.cases)
++    )
+     state_unknown = protocol_unknown or dictionary_unknown
+     if summary is None:
+         transport_bytes = None
+     else:
+         transport_bytes = summary.transport_bytes if payload_bytes_known and not state_unknown else None
+ 
+     def event_kind(kind: str) -> int | None:
+         if not profile_known or state_unknown or unknown_text:
+             return None
++        if gateway_decode_incomplete and kind in {"response", "retry", "fallback"}:
++            return None
+         return summary.event_kind_tokens[kind]
+ 
+     def group_cost(tag: str, unknown: bool = False) -> int | None:
+         if unknown:
+             return None
+         if not profile_known:
+             return None
+         return _measure_group(tagged[tag], profile)
+ 
+     protocol_history_cost = group_cost("protocol_history", protocol_unknown)
+@@ -768,42 +768,47 @@ def _make_candidate_metrics(
+     if profile_known:
+         protocol_exposure = (
+             summary.part_label_tokens["protocol_instructions"]
+             if not unknown_text else None
+         )
+         dictionary_exposure_cost = (
+             summary.part_label_tokens["dictionary_glossary"]
+             if not unknown_text else None
+         )
+         model_input_tokens = (
+-            summary.model_input_tokens if not state_unknown and not unknown_text else None
++            summary.model_input_tokens
++            if not state_unknown and not unknown_text and not gateway_decode_incomplete else None
+         )
+         synthetic_response_tokens = (
+-            summary.model_output_tokens if not state_unknown and not unknown_text else None
++            summary.model_output_tokens
++            if not state_unknown and not unknown_text and not gateway_decode_incomplete else None
++        )
++        distinct_tokens = (
++            summary.distinct_text_event_tokens
++            if not state_unknown and not unknown_text and not gateway_decode_incomplete else None
+         )
+-        distinct_tokens = summary.distinct_text_event_tokens if not state_unknown and not unknown_text else None
+     else:
+         protocol_exposure = None
+         dictionary_exposure_cost = None
+         model_input_tokens = None
+         synthetic_response_tokens = None
+         distinct_tokens = None
+ 
+     request_tokens = event_kind("request")
+     response_tokens = event_kind("response")
+     retry_tokens = event_kind("retry")
+     fallback_tokens = event_kind("fallback")
+     transport_tokens = (
+         summary.transport_tokens if profile_known and not state_unknown and not unknown_text else None
+     )
+     if (
+-        profile_known and not state_unknown and not unknown_text
++        profile_known and not state_unknown and not unknown_text and not gateway_decode_incomplete
+         and scenario.reuse.unit in _SUPPORTED_REUSE_UNITS
+     ):
+         per_use_summary = measure_cost_events(tuple(per_use_events), profile)
+         per_use = (
+             per_use_summary.distinct_text_event_tokens
+             if per_use_summary.status == "exact_local_text" else None
+         )
+         lifecycle = summary.distinct_text_event_tokens
+         amortized = lifecycle / total_uses
+     else:
+@@ -813,20 +818,22 @@ def _make_candidate_metrics(
+ 
+     metric_surface = (
+         "end_to_end" if mode == "model_direct"
+         else "transport_only" if freeform_gateway
+         else "transport_and_model"
+     )
+     if not profile_known or state_unknown or unknown_text or scenario.reuse.unit not in _SUPPORTED_REUSE_UNITS:
+         metric_status = "cannot_compare"
+     elif freeform_gateway:
+         metric_status = "transport_only"
++    elif gateway_decode_incomplete:
++        metric_status = "cannot_compare"
+     else:
+         metric_status = "exact_local_text"
+ 
+     if candidate == "natural_language_freeform":
+         strict_decode_status = "not_applicable"
+         strict_decode_success_count = None
+         full_field_equal_count = None
+         hard_field_equal_count = None
+     else:
+         strict_decode_status = "decoded" if strict_successes == len(scenario.cases) else "fallback_required"
+@@ -893,20 +900,30 @@ def _comparison(
+     baseline_setup: int | None,
+     baseline_per_use: int | None,
+     *,
+     applicable: bool,
+ ) -> BenchmarkComparison:
+     if not applicable:
+         return _not_applicable_comparison()
+     if (
+         baseline_row is None or candidate_row.metric_status != "exact_local_text"
+         or baseline_row.metric_status != "exact_local_text"
++        or (
++            candidate_row.receiver_mode == "gateway"
++            and candidate_row.metric_surface != "transport_only"
++            and candidate_row.strict_decode_status != "decoded"
++        )
++        or (
++            baseline_row.receiver_mode == "gateway"
++            and baseline_row.metric_surface != "transport_only"
++            and baseline_row.strict_decode_status != "decoded"
++        )
+         or candidate_row.lifecycle_cost_tokens is None
+         or baseline_row.lifecycle_cost_tokens is None
+         or candidate_setup is None or candidate_per_use is None
+         or baseline_setup is None or baseline_per_use is None
+     ):
+         return _cannot_compare_comparison()
+     result = calculate_break_even(
+         candidate_setup, candidate_per_use, baseline_setup, baseline_per_use
+     )
+     return BenchmarkComparison(
+diff --git a/tests/test_agentwire_benchmark.py b/tests/test_agentwire_benchmark.py
+index ccba551..2b3b4e5 100644
+--- a/tests/test_agentwire_benchmark.py
++++ b/tests/test_agentwire_benchmark.py
+@@ -773,10 +773,94 @@ def test_no_amortization_crosses_user_domain_profile_or_dictionary_identity(api,
+ 
+ def test_source_domain_rejects_dictionary_history_instead_of_borrowing_setup(api):
+     cases = _cases(api, _fixture_records()[:1])
+     history = _event("source-domain-dictionary-history", "dictionary_distribution", "dictionary_transfer", "synthetic dictionary text")
+     with pytest.raises(ValueError):
+         _scenario(
+             api, cases,
+             dictionary_exposure=api.DictionaryExposure(state="ready_history"),
+             dictionary_history=(history,),
+         )
++
++
++def test_gateway_decode_failure_keeps_attempt_cost_but_blocks_lifecycle_comparison(api, monkeypatch):
++    import agentcodec.agentwire.benchmark as benchmark_module
++
++    cases = _cases(api, _fixture_records()[:1])
++    failed_payload = "{broken synthetic JSON"
++    monkeypatch.setattr(benchmark_module, "render_json", lambda message: failed_payload)
++    report = _run(api, (_scenario(api, cases),), monkeypatch)
++    row = _row(_domain_report(report, "source"), candidate="json", mode="gateway")
++
++    assert row.strict_decode_status == "fallback_required"
++    assert row.metric_status == "cannot_compare"
++    assert row.case_count == 1
++    assert row.event_count == 1
++    assert row.transport_bytes == len(failed_payload.encode("utf-8"))
++    assert row.transport_tokens == len(failed_payload.encode("utf-8"))
++    assert row.request_tokens == len(failed_payload.encode("utf-8"))
++    assert row.model_input_tokens is None
++    assert row.synthetic_response_tokens is None
++    assert row.response_tokens is None
++    assert row.retry_tokens is None
++    assert row.fallback_tokens is None
++    assert row.distinct_text_event_tokens is None
++    assert row.per_use_cost_tokens is None
++    assert row.amortized_cost_tokens is None
++    assert row.lifecycle_cost_tokens is None
++    assert row.vs_natural_language_labelled.status == "cannot_compare"
++    assert row.vs_natural_language_labelled.cost_delta_tokens is None
++    assert row.vs_natural_language_labelled.break_even_status == "cannot_compare"
++
++
++def test_cold_protocol_setup_with_incomplete_history_is_not_exact(api, monkeypatch):
++    cases = _cases(api, _fixture_records()[:1])
++    partial_history = _event(
++        "synthetic-partial-protocol-history", "setup", "setup",
++        "partial synthetic protocol history",
++    )
++    scenario = _scenario(
++        api, cases,
++        states={"json": api.ProtocolState(
++            candidate_id="json", profile_id=PROFILE_ID,
++            state="cold_text_setup", setup_text="Synthetic protocol setup text.",
++            history=(partial_history,), history_complete=False,
++        )},
++    )
++    report = _run(api, (scenario,), monkeypatch)
++    row = _row(_domain_report(report, "source"), candidate="json", mode="gateway")
++
++    assert row.metric_status == "cannot_compare"
++    assert row.candidate_protocol_setup_history_tokens is None
++    assert row.candidate_protocol_setup_tokens is None
++    assert row.lifecycle_cost_tokens is None
++    assert row.amortized_cost_tokens is None
++    assert row.vs_natural_language_labelled.status == "cannot_compare"
++
++
++def test_cold_dictionary_exposure_with_incomplete_history_is_not_exact(api, monkeypatch):
++    cases = _cases(api, _fixture_records()[:1])
++    dictionary = _dictionary()
++    partial_history = _event(
++        "synthetic-partial-dictionary-history", "dictionary_distribution",
++        "dictionary_transfer", "partial synthetic dictionary history",
++    )
++    scenario = _scenario(
++        api, cases, domain="selected_dictionary_transport", dictionary=dictionary,
++        dictionary_exposure=api.DictionaryExposure(
++            state="cold_text_setup", setup_text="Synthetic dictionary setup text.",
++            history_complete=False,
++        ),
++        dictionary_history=(partial_history,),
++    )
++    report = _run(api, (scenario,), monkeypatch, dictionary=dictionary)
++    row = _row(
++        _domain_report(report, "selected_dictionary_transport"),
++        candidate="ac1_dictionary", mode="gateway",
++    )
++
++    assert row.metric_status == "cannot_compare"
++    assert row.dictionary_history_tokens is None
++    assert row.dictionary_setup_tokens is None
++    assert row.lifecycle_cost_tokens is None
++    assert row.amortized_cost_tokens is None
++    assert row.vs_natural_language_labelled.status == "cannot_compare"

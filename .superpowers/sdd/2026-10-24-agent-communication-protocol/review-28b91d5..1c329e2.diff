@@ -1,0 +1,79 @@
+# Review package: 28b91d56bd093780612b12fa3c7ffe94873d0684..1c329e2cfaaef30bc9b13226c0e90b5f92ca176e
+
+## Commits
+1c329e2 fix: hide contract validation inputs
+
+## Files changed
+ src/agentcodec/agentwire/contracts.py |  7 ++++++-
+ tests/test_agentwire_contracts.py     | 11 +++++++++++
+ 2 files changed, 17 insertions(+), 1 deletion(-)
+
+## Diff
+diff --git a/src/agentcodec/agentwire/contracts.py b/src/agentcodec/agentwire/contracts.py
+index cc95710..dafec3c 100644
+--- a/src/agentcodec/agentwire/contracts.py
++++ b/src/agentcodec/agentwire/contracts.py
+@@ -42,21 +42,26 @@ AgentWireReasonCode: TypeAlias = Literal[
+     "dictionary_missing",
+     "dictionary_identity_mismatch",
+     "unknown_alias",
+     "invalid_message",
+ ]
+ 
+ _REASON_CODE_ADAPTER = TypeAdapter(AgentWireReasonCode)
+ 
+ 
+ class _StrictFrozenModel(BaseModel):
+-    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
++    model_config = ConfigDict(
++        strict=True,
++        frozen=True,
++        extra="forbid",
++        hide_input_in_errors=True,
++    )
+ 
+ 
+ class DictionaryIdentity(_StrictFrozenModel):
+     user_id: Identifier
+     version: Identifier
+     sha256: Sha256Hex
+ 
+ 
+ class ReceiverCapabilities(_StrictFrozenModel):
+     user_id: Identifier
+diff --git a/tests/test_agentwire_contracts.py b/tests/test_agentwire_contracts.py
+index 828b032..68b03cf 100644
+--- a/tests/test_agentwire_contracts.py
++++ b/tests/test_agentwire_contracts.py
+@@ -200,20 +200,31 @@ def test_gateway_delivery_enforces_decoded_fallback_and_pass_through_states(cont
+     for context in noncanonical_contexts:
+         with pytest.raises(ValidationError):
+             contracts.GatewayDelivery(
+                 candidate_id="awp1",
+                 decode_status="decoded",
+                 model_context=context,
+                 pass_through_text=None,
+                 reason_code=None,
+             )
+ 
++    sentinel = "SENTINEL_TEST"
++    with pytest.raises(ValidationError) as exc_info:
++        contracts.GatewayDelivery(
++            candidate_id="awp1",
++            decode_status="decoded",
++            pass_through_text=None,
++            reason_code=None,
++            model_context=f"MODEL_CONTEXT_{sentinel}",
++        )
++    assert sentinel not in str(exc_info.value)
++
+     fallback = contracts.GatewayDelivery(
+         candidate_id="json",
+         decode_status="fallback_required",
+         model_context=None,
+         pass_through_text=None,
+         reason_code="invalid_envelope",
+     )
+     assert fallback.reason_code == "invalid_envelope"
+ 
+     pass_through = contracts.GatewayDelivery(

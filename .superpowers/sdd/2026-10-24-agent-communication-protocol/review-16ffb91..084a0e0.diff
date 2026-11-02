@@ -1,0 +1,851 @@
+# Review package: 16ffb917d973fe748c68c2c1877b80edfa401e25..084a0e0f542959c834d9afb9abed3c50d6457be4
+
+## Commits
+084a0e0 fix: close final AgentWire benchmark review findings
+
+## Files changed
+ docs/agentwire-compact-profile-v1.md  |   2 +-
+ src/agentcodec/agentwire/benchmark.py | 155 ++++++++++++++++++++++++++++------
+ src/agentcodec/agentwire/costs.py     |  60 ++++++++++++-
+ src/agentcodec/cli.py                 |   4 +-
+ tests/test_agentwire_benchmark.py     |  79 +++++++++++++++++
+ tests/test_agentwire_cli.py           |  13 +--
+ 6 files changed, 279 insertions(+), 34 deletions(-)
+
+## Diff
+diff --git a/docs/agentwire-compact-profile-v1.md b/docs/agentwire-compact-profile-v1.md
+index 476df13..370267d 100644
+--- a/docs/agentwire-compact-profile-v1.md
++++ b/docs/agentwire-compact-profile-v1.md
+@@ -100,21 +100,21 @@ These codes describe protocol handling, not the underlying private value. Caller
+ `encode_awp1(message, dictionary=None)` snapshots and validates a complete `MessageV1`, then produces the AWP1 envelope. `decode_awp1(payload, receiver, dictionary=None)` returns a complete `MessageV1` or raises a stable `AgentWireError`; it does not return partial fields. The legacy `decode_payload()` dispatcher remains separate and does not guess AWP1 from an unknown prefix: AWP1 requires the explicit AWP1 API.
+ 
+ `decode_at_gateway()` returns either `decoded` with the complete message, or `fallback_required` with `message=null` and a fixed reason code. It does not dispatch or execute the message, switch formats, retry, or resend the original. Handling a fallback is the caller's separate responsibility.
+ 
+ For explicitly declared structured candidates, `deliver_benchmark_at_gateway()` parses the selected format and, on success, gives the next local stage canonical compact JSON for all eleven `MessageV1` fields. The transmitted compact wire is therefore not necessarily the text the model-facing stage receives. The benchmark-only `natural_language_freeform` candidate is different: the gateway passes its text through without a structured decode, has no canonical `model_context`, and reports strict field equality as not applicable.
+ 
+ ## Cost boundaries and interpretation
+ 
+ AgentWire reports transport bytes separately from token estimates and model-input text. In `model_direct` mode, the benchmark constructs a complete local request from the context prefix, format-specific instructions, payload, and—when selected—the dictionary identity and complete glossary. Those components are included in the request-side cost rather than treating the payload as the entire prompt. No model is called. Any response text in the benchmark is synthetic fixture data.
+ 
+-In `gateway` mode, structured wire text is decoded locally before the canonical message context is produced; transport size alone is not a measure of that model context. Gateway structured rows distinguish transport and model-input surfaces. A freeform gateway pass-through is a transport-only comparison and does not claim strict decode, model-input, or response-token measurements.
++In `gateway` mode, structured wire text is decoded locally before the canonical message context is produced; transport size alone is not a measure of that model context. Gateway structured rows distinguish transport and model-input surfaces. In the source domain, structured gateway candidates may be compared with the manually authored freeform baseline on transport tokens and setup break-even only. That comparison does not include model-input, response, or end-to-end costs. The freeform gateway pass-through itself has no strict-decode, model-input, or response-token measurements.
+ 
+ The benchmark reports the fixed `natural_language` renderer as a **labelled-field control**: it serializes the canonical fields under fixed labels. `natural_language_freeform` is a separate, manually authored freeform candidate with annotations. The latter is not parsed by the gateway. A token difference against the labelled-field control is not evidence of savings against real-world natural language, and neither baseline measures model comprehension, semantic preservation, task quality, provider billing, or general compression performance.
+ 
+ Token figures are local ordinary-text tokenizer estimates. If the tokenizer is unavailable, the profile is unreliable, or input contains surrogate-only text, the cost contract reports `cannot_compare` and null token totals/breakdowns rather than inventing zero or estimating from bytes. Transport byte counts remain distinct. Setup, negotiation, protocol instructions, context, dictionary glossary/transfer, payload, response, retry, fallback, and other text are attributed to their declared events and surfaces; undeclared costs are not implied to be free.
+ 
+ ## Security and authority limits
+ 
+ AWP1 is a serialization format, not encryption, authentication, authorization, access control, anonymization, user consent, or a policy engine. A namespace check, capability declaration, dictionary digest, enum, status, or `approval_required` value cannot establish that a sender is trusted or that an action is allowed. The receiver must treat decoded content as data and apply its own separately designed authorization and execution controls. Successful decoding proves only strict structural recovery under the supplied local contracts—not that a model understands the message or that any requested task is safe or correct.
+ 
+ The current interfaces do not implement remote setup, dictionary distribution, or a provider integration. They do not obtain credentials, send data, call a model, retry, or perform automatic fallback. Any future networked or execution behavior requires a separately reviewed contract and explicit authorization.
+diff --git a/src/agentcodec/agentwire/benchmark.py b/src/agentcodec/agentwire/benchmark.py
+index 5b1c427..bae9b74 100644
+--- a/src/agentcodec/agentwire/benchmark.py
++++ b/src/agentcodec/agentwire/benchmark.py
+@@ -497,42 +497,61 @@ def _has_incomplete_state(
+         dictionary_unknown = False
+     else:
+         exposure = scenario.dictionary_candidate_exposure
+         dictionary_unknown = exposure.state == "unknown_history" or not exposure.history_complete
+         unknown_text = unknown_text or (
+             exposure.state == "cold_text_setup" and exposure.setup_text is None
+         )
+     return protocol_unknown, dictionary_unknown, unknown_text
+ 
+ 
+-def _measure_group(events: list[CostEvent], profile: TokenizerProfile | None) -> int | None:
++def _measure_group(
++    events: list[CostEvent], profile: TokenizerProfile | None,
++    measurement_cache: dict[tuple, tuple[int, tuple[int, ...]]] | None = None,
++) -> int | None:
+     if not events:
+         return 0
+-    summary = measure_cost_events(tuple(events), profile)
++    summary = measure_cost_events(tuple(events), profile, measurement_cache=measurement_cache)
+     if summary.status != "exact_local_text":
+         return None
+     return summary.distinct_text_event_tokens
+ 
+ 
++def _measure_transport_group(
++    events: list[CostEvent], profile: TokenizerProfile | None,
++    measurement_cache: dict[tuple, tuple[int, tuple[int, ...]]] | None = None,
++) -> int | None:
++    transport_events = tuple(event for event in events if "transport" in event.surfaces)
++    if not transport_events:
++        return 0
++    summary = measure_cost_events(
++        transport_events, profile, measurement_cache=measurement_cache,
++    )
++    if summary.status != "exact_local_text":
++        return None
++    return summary.transport_tokens
++
++
+ def _make_candidate_metrics(
+     scenario: BenchmarkScenario,
+     dictionary: UserDictionary | None,
+     profile_id: str,
+     profile: TokenizerProfile | None,
+     candidate: BenchmarkCandidate,
+     mode: ReceiverMode,
+     total_uses: int,
+     ordinal: int,
+     transport_copy: tuple[MessageV1, ...] | None,
+     payload_cache: dict[tuple[str, str], tuple[str, object | None]],
+     request_cache: dict[tuple[str, str, str], tuple[str, tuple[CostPart, ...]]],
+-) -> tuple[dict, int | None, int | None]:
++    measurement_cache: dict[tuple, tuple[int, tuple[int, ...]]] | None = None,
++) -> tuple[dict, int | None, int | None, int | None, int | None]:
+     """Return row values, one-unit setup, and one-use message cost."""
+     is_dictionary_candidate = candidate in _DICTIONARY_CANDIDATES
+     selected_dictionary = (
+         dictionary if is_dictionary_candidate
+         and scenario.metadata_domain == "selected_dictionary_transport" else None
+     )
+     protocol_state = next(
+         (state for state in scenario.protocol_states
+          if state.candidate_id == candidate and state.profile_id == profile_id),
+         None,
+@@ -705,21 +724,23 @@ def _make_candidate_metrics(
+                     "response", "response", case.synthetic_response_fixture,
+                     surfaces=("model_output",), multiplicity=total_uses,
+                 )
+                 per_use_events.extend((context_event.model_copy(update={"multiplicity": 1}),
+                                        response_event.model_copy(update={"multiplicity": 1})))
+                 tagged["current_request"].append(context_event)
+                 tagged["current_response"].append(response_event)
+                 all_events.extend((context_event, response_event))
+ 
+     try:
+-        summary = measure_cost_events(tuple(all_events), profile)
++        summary = measure_cost_events(
++            tuple(all_events), profile, measurement_cache=measurement_cache,
++        )
+     except (TypeError, ValueError, RecursionError):
+         summary = None
+         unknown_text = True
+ 
+     profile_known = summary is not None and summary.status == "exact_local_text"
+     gateway_decode_incomplete = (
+         mode == "gateway" and candidate != "natural_language_freeform"
+         and strict_successes != len(scenario.cases)
+     )
+     state_unknown = protocol_unknown or dictionary_unknown
+@@ -733,21 +754,21 @@ def _make_candidate_metrics(
+             return None
+         if gateway_decode_incomplete and kind in {"response", "retry", "fallback"}:
+             return None
+         return summary.event_kind_tokens[kind]
+ 
+     def group_cost(tag: str, unknown: bool = False) -> int | None:
+         if unknown:
+             return None
+         if not profile_known:
+             return None
+-        return _measure_group(tagged[tag], profile)
++        return _measure_group(tagged[tag], profile, measurement_cache)
+ 
+     protocol_history_cost = group_cost("protocol_history", protocol_unknown)
+     protocol_setup_cost = group_cost(
+         "protocol_setup",
+         protocol_unknown or (
+             unknown_text and protocol_state is not None
+             and protocol_state.state == "cold_text_setup"
+         ),
+     )
+     negotiation_cost = group_cost(
+@@ -797,21 +818,23 @@ def _make_candidate_metrics(
+     response_tokens = event_kind("response")
+     retry_tokens = event_kind("retry")
+     fallback_tokens = event_kind("fallback")
+     transport_tokens = (
+         summary.transport_tokens if profile_known and not state_unknown and not unknown_text else None
+     )
+     if (
+         profile_known and not state_unknown and not unknown_text and not gateway_decode_incomplete
+         and scenario.reuse.unit in _SUPPORTED_REUSE_UNITS
+     ):
+-        per_use_summary = measure_cost_events(tuple(per_use_events), profile)
++        per_use_summary = measure_cost_events(
++            tuple(per_use_events), profile, measurement_cache=measurement_cache,
++        )
+         per_use = (
+             per_use_summary.distinct_text_event_tokens
+             if per_use_summary.status == "exact_local_text" else None
+         )
+         lifecycle = summary.distinct_text_event_tokens
+         amortized = lifecycle / total_uses
+     else:
+         per_use = None
+         lifecycle = None
+         amortized = None
+@@ -845,20 +868,38 @@ def _make_candidate_metrics(
+     setup_and_history: int | None
+     component_setup_values = (
+         protocol_history_cost, protocol_setup_cost, negotiation_cost,
+         dictionary_history_cost, dictionary_setup_cost,
+     )
+     if any(value is None for value in component_setup_values):
+         setup_and_history = None
+     else:
+         setup_and_history = sum(component_setup_values)
+ 
++    setup_events = (
++        tagged["protocol_history"] + tagged["protocol_setup"] + tagged["negotiation"]
++        + tagged["dictionary_history"] + tagged["dictionary_setup"]
++    )
++    transport_setup = (
++        None if setup_and_history is None
++        else _measure_transport_group(setup_events, profile, measurement_cache)
++    )
++    if (
++        profile_known and not state_unknown and not unknown_text
++        and scenario.reuse.unit in _SUPPORTED_REUSE_UNITS
++    ):
++        transport_per_use = _measure_transport_group(
++            per_use_events, profile, measurement_cache,
++        )
++    else:
++        transport_per_use = None
++
+     row_values = {
+         "metric_surface": metric_surface,
+         "metric_status": metric_status,
+         "dictionary_condition": "selected" if selected_dictionary is not None else "none",
+         "dictionary_candidate_exposure": (
+             scenario.dictionary_candidate_exposure.state
+             if selected_dictionary is not None else "not_applicable"
+         ),
+         "event_count": (
+             None
+@@ -882,21 +923,24 @@ def _make_candidate_metrics(
+         "retry_tokens": None if freeform_gateway else retry_tokens,
+         "fallback_tokens": None if freeform_gateway else fallback_tokens,
+         "per_use_cost_tokens": None if freeform_gateway else request_and_response_per_use,
+         "amortized_cost_tokens": None if freeform_gateway else amortized,
+         "lifecycle_cost_tokens": None if freeform_gateway else lifecycle,
+         "strict_decode_status": strict_decode_status,
+         "strict_decode_success_count": strict_decode_success_count,
+         "full_field_equal_count": full_field_equal_count,
+         "hard_field_equal_count": hard_field_equal_count,
+     }
+-    return row_values, setup_and_history, request_and_response_per_use
++    return (
++        row_values, setup_and_history, request_and_response_per_use,
++        transport_setup, transport_per_use,
++    )
+ 
+ 
+ def _comparison(
+     candidate_row: BenchmarkRow,
+     baseline_row: BenchmarkRow | None,
+     candidate_setup: int | None,
+     candidate_per_use: int | None,
+     baseline_setup: int | None,
+     baseline_per_use: int | None,
+     *,
+@@ -927,43 +971,89 @@ def _comparison(
+         candidate_setup, candidate_per_use, baseline_setup, baseline_per_use
+     )
+     return BenchmarkComparison(
+         status=result.status,
+         cost_delta_tokens=candidate_row.lifecycle_cost_tokens - baseline_row.lifecycle_cost_tokens,
+         break_even_status=result.status,
+         first_strict_win=result.first_strict_win,
+     )
+ 
+ 
++def _transport_comparison(
++    candidate_row: BenchmarkRow,
++    baseline_row: BenchmarkRow | None,
++    candidate_setup: int | None,
++    candidate_per_use: int | None,
++    baseline_setup: int | None,
++    baseline_per_use: int | None,
++) -> BenchmarkComparison:
++    if (
++        baseline_row is None
++        or candidate_row.metric_status not in {"exact_local_text", "transport_only"}
++        or baseline_row.metric_status not in {"exact_local_text", "transport_only"}
++        or (
++            candidate_row.metric_surface != "transport_only"
++            and candidate_row.strict_decode_status != "decoded"
++        )
++        or (
++            baseline_row.metric_surface != "transport_only"
++            and baseline_row.strict_decode_status != "decoded"
++        )
++        or candidate_row.transport_tokens is None
++        or baseline_row.transport_tokens is None
++        or candidate_setup is None or candidate_per_use is None
++        or baseline_setup is None or baseline_per_use is None
++    ):
++        return _cannot_compare_comparison()
++    result = calculate_break_even(
++        candidate_setup, candidate_per_use, baseline_setup, baseline_per_use,
++    )
++    return BenchmarkComparison(
++        status=result.status,
++        cost_delta_tokens=candidate_row.transport_tokens - baseline_row.transport_tokens,
++        break_even_status=result.status,
++        first_strict_win=result.first_strict_win,
++    )
++
++
+ def _profile_map(tokenizer_profiles: Mapping[str, TokenizerProfile]) -> dict[str, TokenizerProfile]:
+     try:
+         if not isinstance(tokenizer_profiles, Mapping):
+             raise ValueError
+         result = {}
+         for key, value in tokenizer_profiles.items():
+             if not isinstance(key, str) or not key:
+                 continue
+             if isinstance(value, TokenizerProfile):
+                 result[key] = TokenizerProfile.model_validate(value)
+         return result
+     except (TypeError, ValueError, AttributeError):
+         return {}
+ 
+ 
+ def run_agentwire_benchmark(
+     scenarios: tuple[BenchmarkScenario, ...],
+     tokenizer_profiles: Mapping[str, TokenizerProfile],
+     dictionary: UserDictionary | None = None,
++    modes: tuple[ReceiverMode, ...] = ("model_direct", "gateway"),
+ ) -> AgentWireBenchmarkReport:
+     """Run paired local measurements for each independent domain/profile scope."""
+     if type(scenarios) is not tuple or not scenarios:
+         raise ValueError("benchmark scenarios rejected") from None
++    if (
++        type(modes) is not tuple or not modes
++        or any(type(mode) is not str for mode in modes)
++        or len(set(modes)) != len(modes)
++        or any(mode not in {"model_direct", "gateway"} for mode in modes)
++    ):
++        raise ValueError("benchmark modes rejected") from None
++    modes = tuple(mode for mode in ("model_direct", "gateway") if mode in modes)
+     checked_scenarios = tuple(BenchmarkScenario.model_validate(item) for item in scenarios)
+     profiles = _profile_map(tokenizer_profiles)
+     output_scenarios: list[ScenarioReport] = []
+ 
+     for ordinal, scenario in enumerate(checked_scenarios, start=1):
+         selected_dictionary = None
+         transport_copy = None
+         if scenario.metadata_domain == "selected_dictionary_transport":
+             if not isinstance(dictionary, UserDictionary):
+                 raise ValueError("benchmark scenario rejected") from None
+@@ -988,91 +1078,98 @@ def run_agentwire_benchmark(
+         profile_ids = sorted(state_profile_ids | set(profiles))
+         if not profile_ids:
+             profile_ids = ["unknown-tokenizer"]
+ 
+         for profile_id in profile_ids:
+             profile = profiles.get(profile_id)
+             source_hash = _domain_hash("source", scenario, profile_id, selected_dictionary)
+             transport_hash = _domain_hash(
+                 "selected_dictionary_transport", scenario, profile_id, selected_dictionary
+             )
+-            intermediate: dict[tuple[str, str, int], tuple[dict, int | None, int | None]] = {}
++            intermediate: dict[
++                tuple[str, str, int],
++                tuple[dict, int | None, int | None, int | None, int | None],
++            ] = {}
+             rows: list[BenchmarkRow] = []
+             payload_cache: dict[tuple[str, str], tuple[str, object | None]] = {}
+             request_cache: dict[tuple[str, str, str], tuple[str, tuple[CostPart, ...]]] = {}
+-            for mode in ("model_direct", "gateway"):
++            measurement_cache: dict[tuple, tuple[int, tuple[int, ...]]] = {}
++            for mode in modes:
+                 for candidate in _CANDIDATE_ORDER:
+                     allowed = (
+                         candidate in _SOURCE_ALLOWLIST
+                         if scenario.metadata_domain == "source"
+                         else candidate in _SELECTED_ALLOWLIST
+                     )
+                     for total_uses in scenario.reuse.total_uses:
+                         if not allowed:
+                             row = _not_applicable_row(
+                                 ordinal=ordinal, profile_id=profile_id, mode=mode,
+                                 candidate=candidate, scenario=scenario, total_uses=total_uses,
+                                 source_hash=source_hash, transport_hash=transport_hash,
+                             )
+                             rows.append(row)
+-                            intermediate[(candidate, mode, total_uses)] = ({}, None, None)
++                            intermediate[(candidate, mode, total_uses)] = (
++                                {}, None, None, None, None,
++                            )
+                             continue
+-                        values, setup, per_use = _make_candidate_metrics(
++                        values, setup, per_use, transport_setup, transport_per_use = _make_candidate_metrics(
+                             scenario, selected_dictionary, profile_id, profile, candidate,
+                             mode, total_uses, ordinal, transport_copy,
+-                            payload_cache, request_cache,
++                            payload_cache, request_cache, measurement_cache,
+                         )
+                         row = BenchmarkRow(
+                             synthetic_corpus_ordinal=ordinal,
+                             tokenizer_profile_id=profile_id,
+                             receiver_mode=mode,
+                             candidate_id=candidate,
+                             reuse_unit=scenario.reuse.unit,
+                             total_uses=total_uses,
+                             case_count=len(scenario.cases),
+                             source_hash=source_hash,
+                             transport_hash=transport_hash,
+                             vs_natural_language_labelled=_not_applicable_comparison(),
+                             vs_natural_language_freeform=_not_applicable_comparison(),
+                             **values,
+                         )
+                         rows.append(row)
+-                        intermediate[(candidate, mode, total_uses)] = (values, setup, per_use)
++                        intermediate[(candidate, mode, total_uses)] = (
++                            values, setup, per_use, transport_setup, transport_per_use,
++                        )
+ 
+             completed_rows: list[BenchmarkRow] = []
+             for row in rows:
+                 if row.metric_status == "not_applicable":
+                     completed_rows.append(row)
+                     continue
+-                _, candidate_setup, candidate_per_use = intermediate[
++                _, candidate_setup, candidate_per_use, candidate_transport_setup, candidate_transport_per_use = intermediate[
+                     (row.candidate_id, row.receiver_mode, row.total_uses)
+                 ]
+                 labelled_row = next((item for item in rows if (
+                     item.candidate_id == "natural_language"
+                     and item.receiver_mode == row.receiver_mode
+                     and item.total_uses == row.total_uses
+                 )), None)
+                 freeform_row = next((item for item in rows if (
+                     item.candidate_id == "natural_language_freeform"
+                     and item.receiver_mode == row.receiver_mode
+                     and item.total_uses == row.total_uses
+                 )), None)
+-                _, labelled_setup, labelled_per_use = intermediate.get(
+-                    ("natural_language", row.receiver_mode, row.total_uses), ({}, None, None)
+-                )
+-                _, freeform_setup, freeform_per_use = intermediate.get(
+-                    ("natural_language_freeform", row.receiver_mode, row.total_uses), ({}, None, None)
++                _, labelled_setup, labelled_per_use, _, _ = intermediate.get(
++                    ("natural_language", row.receiver_mode, row.total_uses),
++                    ({}, None, None, None, None),
+                 )
+-                freeform_applicable = (
+-                    scenario.metadata_domain == "source"
+-                    and row.receiver_mode == "model_direct"
++                _, freeform_setup, freeform_per_use, freeform_transport_setup, freeform_transport_per_use = intermediate.get(
++                    ("natural_language_freeform", row.receiver_mode, row.total_uses),
++                    ({}, None, None, None, None),
+                 )
++                freeform_applicable = scenario.metadata_domain == "source"
+                 labelled_applicable = (
+                     row.candidate_id in (
+                         _SOURCE_ALLOWLIST if scenario.metadata_domain == "source"
+                         else _SELECTED_ALLOWLIST
+                     )
+                     and row.receiver_mode != "gateway"
+                     or (
+                         row.candidate_id in (
+                             _SOURCE_ALLOWLIST if scenario.metadata_domain == "source"
+                             else _SELECTED_ALLOWLIST
+@@ -1082,24 +1179,30 @@ def run_agentwire_benchmark(
+                     )
+                 )
+                 if row.receiver_mode == "gateway" and row.candidate_id == "natural_language_freeform":
+                     labelled_applicable = False
+                 if scenario.metadata_domain == "selected_dictionary_transport":
+                     freeform_applicable = False
+                 labelled_comparison = _comparison(
+                     row, labelled_row, candidate_setup, candidate_per_use,
+                     labelled_setup, labelled_per_use, applicable=labelled_applicable,
+                 )
+-                freeform_comparison = _comparison(
+-                    row, freeform_row, candidate_setup, candidate_per_use,
+-                    freeform_setup, freeform_per_use, applicable=freeform_applicable,
+-                )
++                if scenario.metadata_domain == "source" and row.receiver_mode == "gateway":
++                    freeform_comparison = _transport_comparison(
++                        row, freeform_row, candidate_transport_setup, candidate_transport_per_use,
++                        freeform_transport_setup, freeform_transport_per_use,
++                    )
++                else:
++                    freeform_comparison = _comparison(
++                        row, freeform_row, candidate_setup, candidate_per_use,
++                        freeform_setup, freeform_per_use, applicable=freeform_applicable,
++                    )
+                 completed_rows.append(row.model_copy(update={
+                     "vs_natural_language_labelled": labelled_comparison,
+                     "vs_natural_language_freeform": freeform_comparison,
+                 }))
+ 
+             output_scenarios.append(ScenarioReport(
+                 metadata_domain=scenario.metadata_domain,
+                 reuse_unit=scenario.reuse.unit,
+                 source_hash=source_hash,
+                 transport_hash=transport_hash,
+diff --git a/src/agentcodec/agentwire/costs.py b/src/agentcodec/agentwire/costs.py
+index 4514df6..e9d984b 100644
+--- a/src/agentcodec/agentwire/costs.py
++++ b/src/agentcodec/agentwire/costs.py
+@@ -1,15 +1,16 @@
+ """Complete local AgentWire event accounting; never calls a model or provider."""
+ 
+ from agentcodec.adaptive import meter
+ from agentcodec.adaptive.contracts import (
+     MAX_HISTORY_EVENTS,
++    MeasuredAttempt,
+     TextAttempt,
+     TextComponent,
+     TokenizerProfile,
+ )
+ from agentcodec.codec import FallbackRequired
+ 
+ from .contracts import (
+     COST_EVENT_KINDS,
+     COST_PART_LABELS,
+     BreakEvenResult,
+@@ -84,20 +85,72 @@ def _attempts(events: tuple[CostEvent, ...]) -> tuple[TextAttempt, ...]:
+                 attempt_kind=_EVENT_ATTEMPT_KIND[event.kind],
+                 components=components,
+                 simulated=True,
+                 multiplicity=event.multiplicity,
+             ))
+         except (TypeError, ValueError, KeyError):
+             raise _CostRejected() from None
+     return tuple(attempts)
+ 
+ 
++def _measurement_key(attempt: TextAttempt, profile: TokenizerProfile) -> tuple:
++    return (
++        profile.encoding_name,
++        profile.library_version,
++        profile.vocabulary_sha256,
++        profile.accuracy,
++        profile.mapping_basis,
++        attempt.attempt_kind,
++        attempt.simulated,
++        tuple((part.kind, part.text, part.resource_identity) for part in attempt.components),
++    )
++
++
++def _measure_attempts_cached(
++    attempts: tuple[TextAttempt, ...],
++    profile: TokenizerProfile,
++    cache: dict[tuple, tuple[int, tuple[int, ...]]],
++) -> tuple[MeasuredAttempt, ...]:
++    if sum(attempt.multiplicity for attempt in attempts) > MAX_HISTORY_EVENTS:
++        raise _CostRejected()
++
++    keys = tuple(_measurement_key(attempt, profile) for attempt in attempts)
++    representatives: dict[tuple, TextAttempt] = {}
++    for key, attempt in zip(keys, attempts, strict=True):
++        if key not in cache:
++            representatives.setdefault(key, attempt)
++    if representatives:
++        measured = meter.measure_attempts(tuple(representatives.values()), profile)
++        if len(measured) != len(representatives):
++            raise _CostRejected()
++        for (key, attempt), result in zip(representatives.items(), measured, strict=True):
++            if (result.event_id != attempt.event_id
++                    or result.attempt_kind != attempt.attempt_kind
++                    or result.simulated is not True
++                    or result.multiplicity != attempt.multiplicity
++                    or len(result.component_tokens) != len(attempt.components)):
++                raise _CostRejected()
++            cache[key] = (result.total_tokens, result.component_tokens)
++
++    return tuple(
++        MeasuredAttempt(
++            event_id=attempt.event_id,
++            attempt_kind=attempt.attempt_kind,
++            total_tokens=cache[key][0],
++            component_tokens=cache[key][1],
++            simulated=attempt.simulated,
++            multiplicity=attempt.multiplicity,
++        )
++        for key, attempt in zip(keys, attempts, strict=True)
++    )
++
++
+ def _transport_bytes(events: tuple[CostEvent, ...]) -> int:
+     return sum(
+         len("".join(part.text for part in event.parts).encode("utf-8"))
+         * event.multiplicity
+         for event in events
+         if "transport" in event.surfaces
+     )
+ 
+ 
+ def _cannot_compare(events: tuple[CostEvent, ...], reason_code: str) -> CostSummary:
+@@ -109,36 +162,41 @@ def _cannot_compare(events: tuple[CostEvent, ...], reason_code: str) -> CostSumm
+         model_input_tokens=None,
+         model_output_tokens=None,
+         distinct_text_event_tokens=None,
+         event_kind_tokens=None,
+         part_label_tokens=None,
+     )
+ 
+ 
+ def measure_cost_events(
+     events: tuple[CostEvent, ...], profile: TokenizerProfile | None,
++    *, measurement_cache: dict[tuple, tuple[int, tuple[int, ...]]] | None = None,
+ ) -> CostSummary:
+     """Measure unique complete events with the existing exact local text meter.
+ 
+     Surface totals are overlapping facets, while distinct_text_event_tokens
+     charges each event text once (with its declared multiplicity). Part deltas
+     retain the meter's signed prefix attribution and are explanations, not extra
+     costs. Repeated IDs must be fully identical; distinct IDs remain distinct
+     requests even when their text happens to match.
+     """
+     unique = _unique_events(events)
+     attempts = _attempts(unique)
+     transport_bytes = _transport_bytes(unique)
+     if profile is None:
+         return _cannot_compare(unique, "tokenizer_unavailable")
+     try:
+-        measured = meter.measure_attempts(attempts, profile)
++        measured = (
++            meter.measure_attempts(attempts, profile)
++            if measurement_cache is None
++            else _measure_attempts_cached(attempts, profile, measurement_cache)
++        )
+     except meter.MeasurementUnavailable as error:
+         return _cannot_compare(unique, error.reason_code)
+     if len(measured) != len(unique):
+         raise _CostRejected()
+ 
+     event_totals: dict[CostEventKind, int] = dict.fromkeys(COST_EVENT_KINDS, 0)
+     part_totals: dict[CostPartLabel, int] = dict.fromkeys(COST_PART_LABELS, 0)
+     transport_tokens = 0
+     model_input_tokens = 0
+     model_output_tokens = 0
+diff --git a/src/agentcodec/cli.py b/src/agentcodec/cli.py
+index c62008b..66593a1 100644
+--- a/src/agentcodec/cli.py
++++ b/src/agentcodec/cli.py
+@@ -600,21 +600,23 @@ def benchmark_agentwire_cli(
+     corpus_counts = _agentwire_reuse_counts(corpus_passes, "--corpus-passes")
+     try:
+         _agentwire_output_preflight(output_dir)
+         cases, dictionary = _agentwire_fixed_inputs()
+         profiles = _agentwire_profiles(tokenizer_names)
+         scenarios = _agentwire_scenarios(
+             cases, dictionary, tokenizer_names, instance_counts, corpus_counts,
+         )
+         from .agentwire.benchmark import run_agentwire_benchmark
+ 
+-        report = run_agentwire_benchmark(scenarios, profiles, dictionary=dictionary)
++        report = run_agentwire_benchmark(
++            scenarios, profiles, dictionary=dictionary, modes=selected_modes,
++        )
+         public = _agentwire_redacted_report(
+             report, tokenizer_names, selected_modes,
+         )
+         contents = (json.dumps(public, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8")
+         _agentwire_write(output_dir, contents)
+     except OSError:
+         typer.echo("agentwire_benchmark_io_error", err=True)
+         raise typer.Exit(code=1) from None
+     except (FallbackRequired, ValueError, TypeError, KeyError, RuntimeError, ImportError, RecursionError):
+         typer.echo("agentwire_benchmark_failed", err=True)
+diff --git a/tests/test_agentwire_benchmark.py b/tests/test_agentwire_benchmark.py
+index 2b3b4e5..86f4fb2 100644
+--- a/tests/test_agentwire_benchmark.py
++++ b/tests/test_agentwire_benchmark.py
+@@ -374,20 +374,99 @@ def test_gateway_freeform_is_transport_only_and_equality_metrics_are_not_applica
+         "candidate_protocol_exposure_tokens", "candidate_protocol_setup_history_tokens",
+         "candidate_protocol_setup_tokens", "negotiation_tokens", "dictionary_exposure_tokens",
+         "dictionary_history_tokens", "dictionary_setup_tokens", "request_tokens",
+         "response_tokens", "retry_tokens", "fallback_tokens", "per_use_cost_tokens",
+         "amortized_cost_tokens", "lifecycle_cost_tokens",
+     ):
+         assert getattr(row, field) is None
+     assert row.metric_surface == "transport_only"
+ 
+ 
++def test_gateway_freeform_comparison_uses_transport_delta_and_break_even(api, monkeypatch):
++    cases = (_cases(api, _fixture_records()[:1])[0].model_copy(update={
++        "freeform_text": "A manually written transport baseline. " * 100,
++    }),)
++    setup_text = "synthetic gateway protocol setup " * 1000
++    scenario = _scenario(api, cases, states={"awp1": api.ProtocolState(
++        candidate_id="awp1", profile_id=PROFILE_ID,
++        state="cold_text_setup", setup_text=setup_text,
++    )})
++    report = _run(api, (scenario,), monkeypatch)
++    domain = _domain_report(report, "source")
++    candidate = _row(domain, candidate="awp1", mode="gateway", total_uses=10)
++    baseline = _row(domain, candidate="natural_language_freeform", mode="gateway", total_uses=10)
++    candidate_one = _row(domain, candidate="awp1", mode="gateway", total_uses=1)
++    baseline_one = _row(domain, candidate="natural_language_freeform", mode="gateway", total_uses=1)
++    candidate_per_use = (candidate.transport_tokens - candidate_one.transport_tokens) // 9
++    baseline_per_use = baseline_one.transport_tokens
++    candidate_setup = candidate_one.transport_tokens - candidate_per_use
++    expected = api.calculate_break_even(candidate_setup, candidate_per_use, 0, baseline_per_use)
++
++    assert candidate.vs_natural_language_freeform.cost_delta_tokens == (
++        candidate.transport_tokens - baseline.transport_tokens
++    )
++    assert candidate.vs_natural_language_freeform.status == expected.status == "finite"
++    assert candidate.vs_natural_language_freeform.break_even_status == expected.status
++    assert candidate.vs_natural_language_freeform.first_strict_win == expected.first_strict_win
++    assert baseline.metric_surface == "transport_only"
++    assert baseline.model_input_tokens is None
++    assert baseline.synthetic_response_tokens is None
++    assert baseline.lifecycle_cost_tokens is None
++
++
++def test_gateway_freeform_comparison_fails_closed_for_unknown_transport_cost(api, monkeypatch):
++    cases = _cases(api, _fixture_records()[:1])
++    scenario = _scenario(api, cases, states={"awp1": api.ProtocolState(
++        candidate_id="awp1", profile_id=PROFILE_ID,
++        state="unknown_history", history_complete=False,
++    )})
++    report = _run(api, (scenario,), monkeypatch)
++    row = _row(_domain_report(report, "source"), candidate="awp1", mode="gateway")
++
++    assert row.metric_status == "cannot_compare"
++    assert row.transport_tokens is None
++    assert row.vs_natural_language_freeform.status == "cannot_compare"
++    assert row.vs_natural_language_freeform.cost_delta_tokens is None
++    assert row.vs_natural_language_freeform.break_even_status == "cannot_compare"
++    assert row.vs_natural_language_freeform.first_strict_win is None
++
++
++def test_benchmark_runner_only_measures_requested_receiver_modes(api, monkeypatch):
++    cases = _cases(api, _fixture_records()[:1])
++    _byte_meter(monkeypatch)
++
++    def forbidden_direct_request(*args, **kwargs):
++        pytest.fail("unselected model_direct mode performed benchmark work")
++
++    monkeypatch.setattr(api, "build_direct_model_request", forbidden_direct_request)
++    report = api.run_agentwire_benchmark(
++        (_scenario(api, cases),), {PROFILE_ID: _profile()}, modes=("gateway",),
++    )
++
++    assert report.scenarios
++    assert all(row.receiver_mode == "gateway" for scenario in report.scenarios for row in scenario.rows)
++
++
++def test_reuse_counts_do_not_retokenize_invariant_event_text(api, monkeypatch):
++    observed = _byte_meter(monkeypatch)
++    cases = _cases(api, _fixture_records()[:1])
++    api.run_agentwire_benchmark((_scenario(api, cases),), {PROFILE_ID: _profile()}, modes=("gateway",))
++
++    signatures = [
++        (profile.encoding_name, attempt.attempt_kind,
++         tuple((component.kind, component.text, component.resource_identity)
++               for component in attempt.components))
++        for attempt, profile in observed
++    ]
++    assert len(signatures) == len(set(signatures))
++
++
+ def test_direct_mode_counts_common_prompt_context_and_response_fixture_for_freeform(api, monkeypatch):
+     import agentcodec.agentwire.benchmark as benchmark_module
+ 
+     cases = _cases(api, _fixture_records()[:1])
+     seen_requests = []
+     real_builder = benchmark_module.build_direct_model_request
+ 
+     def recording_builder(context_prefix, candidate_id, wire_payload, dictionary=None):
+         result = real_builder(context_prefix, candidate_id, wire_payload, dictionary=dictionary)
+         seen_requests.append((context_prefix, candidate_id, wire_payload, result))
+diff --git a/tests/test_agentwire_cli.py b/tests/test_agentwire_cli.py
+index f019c10..1e9bcdb 100644
+--- a/tests/test_agentwire_cli.py
++++ b/tests/test_agentwire_cli.py
+@@ -129,33 +129,34 @@ def _stub_runner(monkeypatch, captured=None, inject_private=False):
+                     })
+                     for row in scenario["rows"]:
+                         row.update({
+                             "input_hash": "d" * 64,
+                             "glossary": "RAW-GLOSSARY-CONTENT",
+                             "absolute_path": "/private/row/path",
+                         })
+                         row["vs_natural_language_labelled"]["payload"] = "RAW-NESTED-PAYLOAD"
+             return data
+ 
+-    def run(scenarios, profiles, dictionary=None):
++    def run(scenarios, profiles, dictionary=None, modes=("model_direct", "gateway")):
+         if captured is not None:
+-            captured.append((scenarios, profiles, dictionary))
++            captured.append((scenarios, profiles, dictionary, modes))
+         selected_by_unit = {}
+         for scenario in scenarios:
+             selected_by_unit.setdefault(scenario.reuse.unit, set()).update(
+                 scenario.reuse.total_uses,
+             )
+         data = _fake_report().model_dump(mode="json")
+         for scenario_report in data["scenarios"]:
+             selected = selected_by_unit[scenario_report["reuse_unit"]]
+             scenario_report["rows"] = [
+-                row for row in scenario_report["rows"] if row["total_uses"] in selected
++                row for row in scenario_report["rows"]
++                if row["total_uses"] in selected and row["receiver_mode"] in modes
+             ]
+         return Report(data)
+ 
+     monkeypatch.setattr(benchmark, "run_agentwire_benchmark", run)
+ 
+ 
+ def test_benchmark_agentwire_writes_versioned_report(app, tmp_path, monkeypatch):
+     def forbidden(*args, **kwargs):
+         pytest.fail("AgentWire CLI attempted network access")
+ 
+@@ -313,46 +314,48 @@ def test_reuse_options_remain_separate(app, tmp_path, monkeypatch):
+     captured = []
+     _stub_runner(monkeypatch, captured)
+     output_dir = tmp_path / "separate-reuse"
+     result = invoke(app, [
+         "--output-dir", str(output_dir), "--tokenizers", "cl100k_base",
+         "--instance-uses", "10", "--corpus-passes", "50", "--modes", "gateway",
+     ])
+ 
+     assert result.exit_code == 0, result.output
+     assert len(captured) == 1
+-    scenarios, profiles, _ = captured[0]
++    scenarios, profiles, _, modes = captured[0]
+     assert set(profiles) == {"cl100k_base"}
+     assert {scenario.reuse.unit for scenario in scenarios} == {
+         "same_message_instance", "whole_corpus_pass",
+     }
+     for scenario in scenarios:
+         wanted = (10,) if scenario.reuse.unit == "same_message_instance" else (50,)
+         assert scenario.reuse.total_uses == wanted
++    assert modes == ("gateway",)
+     report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
+     for scenario in report["scenarios"]:
+         wanted = {10} if scenario["reuse_unit"] == "same_message_instance" else {50}
+         assert {row["total_uses"] for row in scenario["rows"]} == wanted
+         assert {row["receiver_mode"] for row in scenario["rows"]} == {"gateway"}
+         assert {row["tokenizer_profile_id"] for row in scenario["rows"]} == {"cl100k_base"}
+ 
+ 
+ def test_reuse_defaults_pass_full_ranges_to_runner(app, tmp_path, monkeypatch):
+     captured = []
+     _stub_runner(monkeypatch, captured)
+     output_dir = tmp_path / "default-reuse"
+     result = invoke(app, ["--output-dir", str(output_dir)])
+ 
+     assert result.exit_code == 0, result.output
+-    scenarios, _, _ = captured[0]
++    scenarios, _, _, _ = captured[0]
+     assert scenarios
+     assert all(scenario.reuse.total_uses == (1, 10, 50) for scenario in scenarios)
++    assert captured[0][3] == ("gateway", "model_direct")
+ 
+ 
+ @pytest.mark.parametrize("args", [
+     ["--input", "caller.jsonl"],
+     ["--dictionary", "caller.json"],
+     ["--instance-uses", "0"],
+     ["--instance-uses", "51"],
+     ["--instance-uses", "1,2"],
+     ["--corpus-passes", "-1"],
+     ["--corpus-passes", "10,10"],
